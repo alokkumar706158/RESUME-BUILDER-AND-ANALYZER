@@ -1,0 +1,16 @@
+# Node dependencies
+node_modules/
+
+# Local configuration
+.env
+.env.local
+
+# Build folders
+dist/
+build/
+
+# System and logs
+.DS_Store
+*.log
+.vscode/
+.idea/

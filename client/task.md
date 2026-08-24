@@ -1,0 +1,28 @@
+# Task List: ResumeRoast AI Development
+
+- `[x]` Setup & Project Structure Initialization
+- `[x]` Backend Development
+  - `[x]` Set up `server/package.json` and dependencies
+  - `[x]` Create DB Configuration (`server/config/db.js`)
+  - `[x]` Define Database Schemas (`User.js`, `Resume.js`, `ResumeHistory.js`)
+  - `[x]` Create Auth Controllers, Middlewares & Token Routes
+  - `[x]` Implement Gemini AI Integration (`server/services/gemini.js`)
+  - `[x]` Create Resume Controllers (`upload`, `analyze`, `rewrite`, `download`)
+  - `[x]` Write PDF Generator Utility (`server/utils/pdfGenerator.js`)
+  - `[x]` Assemble Express entry point (`server/server.js`)
+- `[x]` Frontend Development
+  - `[x]` Initialize React + Vite project in `client/`
+  - `[x]` Configure Tailwind CSS for premium dark glassmorphism SaaS styling
+  - `[x]` Implement Authentication Context (`AuthContext.jsx`) and Router setup
+  - `[x]` Create components: `Navbar`, `Sidebar`, `ATSGauge`, `ResumeUpload`
+  - `[x]` Create pages:
+    - `[x]` `Landing` (animated blobs, glassmorphism hero, testimonials, FAQ)
+    - `[x]` `Login` & `Signup`
+    - `[x]` `Dashboard` (drag-and-drop, target job role, recent history, stats chart)
+    - `[x]` `ResumeAnalysis` (Score breakdown, Missing Keywords, Honest Roast tab, Revisions with comparative edit tools and "Fix it for me")
+    - `[x]` `History` (resume history with comparative changes)
+    - `[x]` `Profile` (social links, change password, credentials)
+- `[x]` End-to-End Verification & Documentation
+  - `[x]` Run validation tests for full flow (PDF Upload $\rightarrow$ Parse $\rightarrow$ AI Roast $\rightarrow$ Edit $\rightarrow$ Download PDF)
+  - `[x]` Create `README.md` with instructions
+  - `[x]` Create walkthrough summary
