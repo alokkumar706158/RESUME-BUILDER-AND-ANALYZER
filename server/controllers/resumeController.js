@@ -1,42 +1,78 @@
+
 import pdfParse from 'pdf-parse';
 import Resume from '../models/Resume.js';
 import ResumeHistory from '../models/ResumeHistory.js';
 import User from '../models/User.js';
 import { analyzeResumeText, rewriteEntireResume, rewriteResumeSection, executeSectionAIAction } from '../services/gemini.js';
+import { analyzeResumeTextLocally } from '../services/localAnalyzer.js';
 import { generateResumePDF } from '../utils/pdfGenerator.js';
 import { generateResumeDOCX } from '../utils/docxGenerator.js';
+
+const extractPdfText = async (buffer) => {
+  let isPasswordProtected = false;
+
+  // Try pdfParse
+  try {
+    const data = await pdfParse(buffer);
+    if (data && data.text && data.text.trim().length > 0) {
+      return { text: data.text.trim(), isPasswordProtected: false };
+    }
+  } catch (err) {
+    const errMsg = (err.message || '').toLowerCase();
+    if (errMsg.includes('password') || errMsg.includes('encrypted')) {
+      return { text: '', isPasswordProtected: true };
+    }
+  }
+
+  return { text: '', isPasswordProtected };
+};
 
 export const uploadResume = async (req, res) => {
   const uploadedFile = req.file || (req.files && req.files[0]);
 
   if (!uploadedFile) {
-    return res.status(400).json({ message: 'No file uploaded' });
+    return res.status(400).json({ message: 'No file uploaded. Please select a PDF file.' });
+  }
+
+  // Validate mimetype/extension
+  const isPdf = uploadedFile.mimetype === 'application/pdf' || 
+                (uploadedFile.originalname && uploadedFile.originalname.toLowerCase().endsWith('.pdf'));
+  if (!isPdf) {
+    return res.status(400).json({ message: 'Only PDF files are supported. Please upload a valid PDF.' });
   }
 
   try {
-    let parsedText = '';
-    try {
-      const data = await pdfParse(uploadedFile.buffer);
-      parsedText = data ? data.text : '';
-    } catch (pdfErr) {
-      console.warn('pdf-parse failed, using raw buffer string fallback:', pdfErr.message);
+    const { text, isPasswordProtected } = await extractPdfText(uploadedFile.buffer);
+
+    if (isPasswordProtected) {
+      return res.status(400).json({
+        message: 'This PDF is password-protected or encrypted. Please remove password protection and try again.'
+      });
     }
 
-    // Fallback if pdfParse produced empty string or threw error
-    if (!parsedText || parsedText.trim().length === 0) {
-      const rawStr = uploadedFile.buffer.toString('utf8');
-      // Clean non-printable bytes
-      parsedText = rawStr.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+    // Clean extracted text
+    const cleanedText = text ? text.trim() : '';
+
+    if (!cleanedText || cleanedText.length < 15) {
+      return res.status(400).json({
+        message: 'Could not extract readable text from this PDF. Please ensure it is not an empty or image-only/scanned PDF.'
+      });
     }
+
+    // Extract structured data from resume text using local extraction engine
+    const analysis = analyzeResumeTextLocally(cleanedText, 'Software Engineer');
+    const improvedResume = analysis.improvedResume || {};
 
     res.json({
-      originalText: parsedText || 'Extracted resume content',
+      originalText: cleanedText,
       filename: uploadedFile.originalname || 'resume.pdf',
-      size: uploadedFile.size || 0
+      size: uploadedFile.size || 0,
+      extractedData: improvedResume,
+      improvedResume
     });
   } catch (error) {
     console.error('Upload Resume Error:', error);
-    res.status(500).json({ message: 'Failed to parse PDF file: ' + error.message });
+    res.status(500).json({ message: 'Failed to extract text from PDF: ' + error.message });
   }
 };
 

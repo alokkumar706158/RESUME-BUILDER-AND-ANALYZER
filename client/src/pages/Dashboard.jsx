@@ -7,16 +7,20 @@ import {
   Sparkles, 
   TrendingUp, 
   Calendar,
-  Briefcase
+  Briefcase,
+  ExternalLink
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import ResumeUpload from '../components/ResumeUpload';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import Loader from '../components/Loader';
+import { useAuth } from '../context/AuthContext';
+import { fetchUserResumesFromSupabase, getResumeDownloadUrl } from '../services/supabaseResumeService';
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -39,8 +43,30 @@ const Dashboard = () => {
 
   const fetchHistory = async () => {
     try {
-      const { data } = await api.get('/resume/history');
-      setHistory(data);
+      // Fetch from MongoDB
+      let mongoHistory = [];
+      try {
+        const { data } = await api.get('/resume/history');
+        mongoHistory = data || [];
+      } catch (err) {
+        console.warn('MongoDB history fetch failed:', err.message);
+      }
+      
+      // Fetch from Supabase
+      let supabaseHistory = [];
+      if (user) {
+        supabaseHistory = await fetchUserResumesFromSupabase(user);
+      }
+
+      // Combine and remove duplicates based on filename/time
+      const combined = [...supabaseHistory, ...mongoHistory].sort((a, b) => 
+        new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at)
+      );
+      
+      // Basic deduplication by ID or filename
+      const unique = Array.from(new Map(combined.map(item => [item._id || item.filename, item])).values());
+      
+      setHistory(unique);
     } catch (error) {
       console.error(error);
       toast.error('Failed to load analysis history.');
@@ -55,6 +81,19 @@ const Dashboard = () => {
 
   const handleUploadSuccess = (data) => {
     setParsedData(data);
+    const extracted = data?.extractedData || data?.improvedResume || data;
+    if (extracted) {
+      try {
+        localStorage.setItem('resumeroast_pending_import', JSON.stringify({
+          ...extracted,
+          filename: data.filename
+        }));
+      } catch (e) {
+        console.error('Failed to store pending import:', e);
+      }
+      toast.success('Resume extracted! Opening Resume Builder...', { icon: '✨' });
+      navigate('/builder');
+    }
   };
 
   const handleAnalyze = async () => {
@@ -214,36 +253,66 @@ const Dashboard = () => {
             ) : (
               <div className="space-y-3.5 max-h-[460px] overflow-y-auto pr-1">
                 {history.slice(0, 5).map((item) => (
-                  <Link 
+                  <div 
                     key={item._id}
-                    to={`/analysis/${item._id}`}
-                    title={item.originalFile?.filename || 'Resume'}
-                    className="flex items-center justify-between p-3.5 bg-slate-950/40 hover:bg-slate-950 border border-slate-850 hover:border-slate-850 rounded-xl transition-all group"
+                    className="flex flex-col p-3.5 bg-slate-950/40 hover:bg-slate-950 border border-slate-850 hover:border-slate-850 rounded-xl transition-all group"
                   >
-                    <div className="space-y-1 text-left min-w-0 pr-2">
-                      <h4 className="text-sm font-semibold text-white truncate" title={item.originalFile?.filename || 'Resume'}>
-                        {item.originalFile?.filename}
-                      </h4>
-                      <div className="flex items-center space-x-2 text-xs text-slate-500">
-                        <span className="truncate max-w-[120px]">{item.jobRole}</span>
-                        <span>•</span>
-                        <div className="flex items-center space-x-1 flex-shrink-0">
-                          <Calendar className="w-3.5 h-3.5" />
-                          <span>{new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                    <div 
+                      onClick={() => {
+                        if (item.isSupabase) {
+                          if (item.extracted_data) {
+                            localStorage.setItem('resumeroast_pending_import', JSON.stringify({
+                              ...item.extracted_data,
+                              filename: item.filename
+                            }));
+                          }
+                          navigate('/builder');
+                        } else {
+                          navigate(`/analysis/${item._id}`);
+                        }
+                      }}
+                      title={item.originalFile?.filename || 'Resume'}
+                      className="cursor-pointer flex items-center justify-between"
+                    >
+                      <div className="space-y-1 text-left min-w-0 pr-2">
+                        <h4 className="text-sm font-semibold text-white truncate" title={item.originalFile?.filename || 'Resume'}>
+                          {item.originalFile?.filename}
+                        </h4>
+                        <div className="flex items-center space-x-2 text-xs text-slate-500">
+                          <span className="truncate max-w-[120px]">{item.jobRole}</span>
+                          <span>•</span>
+                          <div className="flex items-center space-x-1 flex-shrink-0">
+                            <Calendar className="w-3.5 h-3.5" />
+                            <span>{new Date(item.createdAt || item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center space-x-2 flex-shrink-0">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                          item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400' :
+                          item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400' :
+                          'bg-rose-500/10 text-rose-400'
+                        }`}>
+                          {item.atsScore}
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2 flex-shrink-0">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                        item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400' :
-                        item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400' :
-                        'bg-rose-500/10 text-rose-400'
-                      }`}>
-                        {item.atsScore}
-                      </span>
-                      <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
-                    </div>
-                  </Link>
+                    
+                    {item.isSupabase && item.file_url && (
+                      <div className="mt-3 pt-3 border-t border-slate-800/50 flex justify-end">
+                        <a 
+                          href={item.file_url} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="text-xs text-brandPurple flex items-center hover:underline"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                          View Original PDF
+                        </a>
+                      </div>
+                    )}
+                  </div>
                 ))}
                 
                 {history.length > 5 && (

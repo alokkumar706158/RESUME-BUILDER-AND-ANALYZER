@@ -79,11 +79,7 @@ export const generateResumePDF = (resumeData, userData) => {
   if (contactInfo.linkedin || userData?.linkedin) linkParts.push(contactInfo.linkedin || userData?.linkedin);
   if (contactInfo.github || userData?.github) linkParts.push(contactInfo.github || userData?.github);
   if (contactInfo.portfolio) linkParts.push(contactInfo.portfolio);
-  if (Array.isArray(contactInfo.customLinks)) {
-    contactInfo.customLinks.forEach(l => {
-      if (l.url) linkParts.push(l.heading ? `${l.heading}: ${l.url}` : l.url);
-    });
-  }
+
   if (linkParts.length > 0) {
     linkParts.forEach(linkText => {
       const linkX = (pageWidth - doc.getTextWidth(linkText)) / 2;

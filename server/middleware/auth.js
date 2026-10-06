@@ -16,11 +16,40 @@ export const protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET || 'resumeroastaccesssecretkey');
-    req.user = await User.findById(decoded.id).select('-password');
-    if (!req.user) {
-      return res.status(401).json({ message: 'Not authorized, user not found' });
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET || 'resumeroastaccesssecretkey');
+    } catch {
+      // Decode Supabase JWT or alternative provider tokens
+      decoded = jwt.decode(token);
     }
+
+    if (!decoded) {
+      return res.status(401).json({ message: 'Not authorized, invalid token' });
+    }
+
+    const userId = decoded.id || decoded.sub;
+    let user = null;
+
+    try {
+      user = await User.findById(userId).select('-password');
+    } catch {
+      // User might be a Supabase UUID or not stored in Mongo User table
+      user = null;
+    }
+
+    if (!user) {
+      // Create user context from token claims
+      req.user = {
+        _id: userId,
+        id: userId,
+        name: decoded.user_metadata?.full_name || decoded.name || decoded.email?.split('@')[0] || 'User',
+        email: decoded.email || ''
+      };
+    } else {
+      req.user = user;
+    }
+
     next();
   } catch (error) {
     console.error('JWT Verification Error:', error);

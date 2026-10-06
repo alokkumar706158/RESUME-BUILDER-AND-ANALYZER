@@ -30,7 +30,9 @@ import {
   AlertCircle,
   GripVertical,
   Maximize2,
-  Sliders
+  Sliders,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -38,9 +40,12 @@ import Loader from '../components/Loader';
 import ClassicATSTemplate from '../components/templates/ClassicATSTemplate';
 import ModernATSTemplate from '../components/templates/ModernATSTemplate';
 import RecommendedATSTemplate from '../components/templates/RecommendedATSTemplate';
+import { sanitizeEducationList } from '../utils/educationSanitizer';
 import PhotoEditorModal from '../components/PhotoEditorModal';
 import ImportResumeModal from '../components/ImportResumeModal';
 import ImportCurationModal from '../components/ImportCurationModal';
+import { useAuth } from '../context/AuthContext';
+import { saveResumeBuilderToSupabase, fetchLatestUserResumeFromSupabase } from '../services/supabaseResumeService';
 
 const TARGET_JOB_ROLES = [
   'Java Developer',
@@ -101,6 +106,7 @@ const ROLE_CERT_RECOMMENDATIONS = {
 };
 
 const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
+  const { user } = useAuth();
   const { id: paramId } = useParams();
   const id = resumeIdProp || paramId;
   const navigate = useNavigate();
@@ -112,15 +118,17 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   const [previewMobileModal, setPreviewMobileModal] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
 
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   // Synchronize active step with URL search parameter & browser history stack
   const stepParam = parseInt(searchParams.get('step'), 10);
-  const initialStep = !isNaN(stepParam) && stepParam >= 1 && stepParam <= 10 ? stepParam : 1;
+  const initialStep = !isNaN(stepParam) && stepParam >= 1 && stepParam <= 9 ? stepParam : 1;
   const [internalStep, setInternalStep] = useState(initialStep);
 
   // Sync internalStep when URL parameter changes (e.g. browser back/forward buttons)
   useEffect(() => {
     const s = parseInt(searchParams.get('step'), 10);
-    if (!isNaN(s) && s >= 1 && s <= 10) {
+    if (!isNaN(s) && s >= 1 && s <= 9) {
       setInternalStep(s);
     }
   }, [searchParams]);
@@ -251,8 +259,16 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
   const saveToLocalStorage = (dataToSave, targetId = null) => {
     try {
+      const payloadToSave = {
+        ...dataToSave,
+        selectedTemplate,
+        jobRole,
+        lastUpdated: new Date().toISOString()
+      };
       const storageKey = `resumeroast_builder_${targetId || resumeId || id || 'draft'}`;
-      localStorage.setItem(storageKey, JSON.stringify(dataToSave));
+      localStorage.setItem(storageKey, JSON.stringify(payloadToSave));
+      localStorage.setItem('resumeroast_builder_latest', JSON.stringify(payloadToSave));
+      localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
     } catch (e) {
       console.error('Failed to save to local storage:', e);
     }
@@ -261,68 +277,57 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   const handleImportSuccess = (importedData) => {
     if (!importedData) return;
     const imp = importedData.improvedResume || importedData || {};
+    const ci = imp.contactInfo || {};
 
     const newContact = {
-      fullName: imp.contactInfo?.fullName || imp.fullName || imp.name || '',
-      email: imp.contactInfo?.email || imp.email || '',
-      phone: imp.contactInfo?.phone || imp.phone || '',
-      linkedin: imp.contactInfo?.linkedin || imp.linkedin || '',
-      github: imp.contactInfo?.github || imp.github || '',
-      portfolio: imp.contactInfo?.portfolio || imp.portfolio || '',
-      address: imp.contactInfo?.address || imp.address || '',
-      profilePhoto: imp.contactInfo?.profilePhoto || '',
-      photoEnabled: Boolean(imp.contactInfo?.profilePhoto),
-      photoSize: imp.contactInfo?.photoSize || 76
+      fullName: ci.fullName || imp.fullName || imp.name || '',
+      email: ci.email || imp.email || '',
+      phone: ci.phone || imp.phone || '',
+      linkedin: ci.linkedin || imp.linkedin || '',
+      github: ci.github || imp.github || '',
+      portfolio: ci.portfolio || imp.portfolio || '',
+      address: ci.address || imp.address || '',
+      profilePhoto: ci.profilePhoto || '',
+      photoEnabled: Boolean(ci.profilePhoto),
+      photoSize: ci.photoSize || 76,
+      customLinks: Array.isArray(ci.customLinks)
+        ? ci.customLinks
+        : (Array.isArray(imp.customLinks) ? imp.customLinks : [])
     };
 
     const newSummary = imp.summary || '';
 
-    const newSkills = Array.isArray(imp.skills) && imp.skills.length > 0
+    const newSkills = Array.isArray(imp.skills)
       ? imp.skills.map(s => typeof s === 'string' ? { name: s, rating: 4 } : s)
       : [];
 
-    const newExperience = Array.isArray(imp.experience) && imp.experience.length > 0
-      ? imp.experience
-      : [];
+    const newExperience = Array.isArray(imp.experience) ? imp.experience : [];
+    const newProjects = Array.isArray(imp.projects) ? imp.projects : [];
+    const newEducation = Array.isArray(imp.education) ? sanitizeEducationList(imp.education) : [];
 
-    const newProjects = Array.isArray(imp.projects) && imp.projects.length > 0
-      ? imp.projects
-      : [];
-
-    const newEducation = Array.isArray(imp.education) && imp.education.length > 0
-      ? imp.education
-      : [];
-
-    const newCertifications = Array.isArray(imp.certifications) && imp.certifications.length > 0
+    const newCertifications = Array.isArray(imp.certifications)
       ? imp.certifications.map(c => typeof c === 'string' ? { name: c } : c)
       : [];
 
-    const newAchievements = Array.isArray(imp.achievements) && imp.achievements.length > 0
+    const newAchievements = Array.isArray(imp.achievements)
       ? imp.achievements.map(a => typeof a === 'string' ? { title: a, description: a } : a)
       : [];
 
-    const newLinks = Array.isArray(imp.links) && imp.links.length > 0
-      ? imp.links
-      : [];
+    const newLinks = Array.isArray(imp.links) ? imp.links : [];
 
-    setResumeData(prev => ({
-      ...prev,
-      contactInfo: {
-        ...prev.contactInfo,
-        ...newContact,
-        fullName: newContact.fullName || prev.contactInfo.fullName,
-        email: newContact.email || prev.contactInfo.email,
-        phone: newContact.phone || prev.contactInfo.phone
-      },
-      summary: newSummary || prev.summary,
-      skills: newSkills.length > 0 ? newSkills : prev.skills,
-      experience: newExperience.length > 0 ? newExperience : prev.experience,
-      projects: newProjects.length > 0 ? newProjects : prev.projects,
-      education: newEducation.length > 0 ? newEducation : prev.education,
-      certifications: newCertifications.length > 0 ? newCertifications : prev.certifications,
-      achievements: newAchievements.length > 0 ? newAchievements : prev.achievements,
-      links: newLinks.length > 0 ? newLinks : prev.links
-    }));
+    const cleanPayload = {
+      contactInfo: newContact,
+      summary: newSummary,
+      skills: newSkills,
+      experience: newExperience,
+      projects: newProjects,
+      education: newEducation,
+      certifications: newCertifications,
+      achievements: newAchievements,
+      links: newLinks
+    };
+
+    setResumeData(cleanPayload);
 
     if (importedData._id) {
       setResumeId(importedData._id);
@@ -331,10 +336,10 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       setAtsScore(importedData.atsScore);
     }
 
-    saveToLocalStorage(imp, importedData._id);
+    saveToLocalStorage(cleanPayload, importedData._id);
 
     setImportModalOpen(false);
-    toast.success('Resume imported successfully! All content is live in preview.', { icon: '📄' });
+    toast.success('Resume imported successfully! Loaded PDF links only.', { icon: '📄' });
   };
 
   const handleApplyCuration = (finalMergedResume) => {
@@ -372,10 +377,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       photoRotation: 0,
       photoFrameStyle: 'passport',
       photoSize: 76,
-      customLinks: [
-        { heading: 'LeetCode', url: 'leetcode.com/u/alokkumar' },
-        { heading: 'HackerRank', url: 'hackerrank.com/alokkumar' }
-      ]
+      customLinks: []
     },
     summary: 'Detail-oriented and results-driven Java Developer with 2+ years of hands-on experience in building scalable RESTful microservices, backend APIs, and web applications using Spring Boot, Hibernate, and modern cloud technologies.',
     skills: [
@@ -470,34 +472,30 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
         description: 'Achieved 4-star rating on CodeChef and solved 350+ algorithmic problems across LeetCode & CodeChef.'
       }
     ],
-    links: [
-      { heading: 'LeetCode', url: 'leetcode.com/u/alokkumar' },
-      { heading: 'CodeChef', url: 'codechef.com/users/alokkumar' }
-    ],
+    links: [],
     languages: [
       { name: 'English', proficiency: 'Advanced', rating: 5 },
       { name: 'Hindi', proficiency: 'Native', rating: 5 }
     ]
   });
 
-  // Steps definition (10 steps)
+  // Steps definition (9 steps)
   const steps = [
     { id: 1, number: '01', name: 'Personal Info', icon: User },
-    { id: 2, number: '02', name: 'Summary', icon: FileText },
-    { id: 3, number: '03', name: 'Skills', icon: BookOpen },
-    { id: 4, number: '04', name: 'Experience', icon: Briefcase },
-    { id: 5, number: '05', name: 'Projects', icon: FolderKanban },
-    { id: 6, number: '06', name: 'Education', icon: GraduationCap },
-    { id: 7, number: '07', name: 'Certifications', icon: Award },
-    { id: 8, number: '08', name: 'Achievements', icon: Trophy },
-    { id: 9, number: '09', name: 'Links', icon: LinkIcon },
-    { id: 10, number: '10', name: 'Review & Export', icon: FileCheck }
+    { id: 2, number: '02', name: 'Skills', icon: BookOpen },
+    { id: 3, number: '03', name: 'Experience', icon: Briefcase },
+    { id: 4, number: '04', name: 'Projects', icon: FolderKanban },
+    { id: 5, number: '05', name: 'Education', icon: GraduationCap },
+    { id: 6, number: '06', name: 'Certifications', icon: Award },
+    { id: 7, number: '07', name: 'Achievements', icon: Trophy },
+    { id: 8, number: '08', name: 'Summary', icon: FileText },
+    { id: 9, number: '09', name: 'Review & Export', icon: FileCheck }
   ];
 
   // Calculate section completions
   const calculateCompletion = () => {
     let completedCount = 0;
-    const totalSteps = 9; // 9 content steps
+    const totalSteps = 8; // 8 content steps
 
     if (resumeData.contactInfo.fullName && resumeData.contactInfo.email && resumeData.contactInfo.phone) completedCount++;
     if (resumeData.summary && resumeData.summary.length > 20) completedCount++;
@@ -507,25 +505,50 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     if (resumeData.education && resumeData.education.length > 0) completedCount++;
     if (resumeData.certifications && resumeData.certifications.length > 0) completedCount++;
     if (resumeData.achievements && resumeData.achievements.length > 0) completedCount++;
-    if (resumeData.contactInfo.github || resumeData.contactInfo.linkedin || (resumeData.links && resumeData.links.length > 0)) completedCount++;
 
     return Math.min(100, Math.round((completedCount / totalSteps) * 100));
   };
 
   const completionPercent = calculateCompletion();
 
-  // Load from local storage or DB
+  const [autoSaveStatus, setAutoSaveStatus] = useState('saved');
+
+  // Load from local storage or DB or pending import
   useEffect(() => {
-    const storageKey = `resumeroast_builder_${id || 'draft'}`;
-    const savedLocal = localStorage.getItem(storageKey);
+    // Check if there is a pending import from PDF upload
+    const pending = localStorage.getItem('resumeroast_pending_import');
+    if (pending) {
+      try {
+        const parsedPending = JSON.parse(pending);
+        localStorage.removeItem('resumeroast_pending_import');
+        if (parsedPending) {
+          handleImportSuccess(parsedPending);
+          setLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.error('Error applying pending import:', e);
+      }
+    }
+
+    const primaryKey = `resumeroast_builder_${id || 'draft'}`;
+    const savedLocal =
+      localStorage.getItem(primaryKey) ||
+      localStorage.getItem('resumeroast_builder_latest') ||
+      localStorage.getItem('resumeroast_builder_draft');
+
     if (savedLocal) {
       try {
         const parsed = JSON.parse(savedLocal);
         if (parsed && typeof parsed === 'object') {
+          if (parsed.selectedTemplate) setSelectedTemplate(parsed.selectedTemplate);
+          if (parsed.jobRole) setJobRole(parsed.jobRole);
+
           setResumeData(prev => ({
             ...prev,
             ...parsed,
-            contactInfo: { ...prev.contactInfo, ...(parsed.contactInfo || {}) }
+            contactInfo: { ...prev.contactInfo, ...(parsed.contactInfo || {}) },
+            education: sanitizeEducationList(parsed.education || prev.education)
           }));
         }
       } catch (e) {
@@ -533,29 +556,80 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       }
     }
 
-    if (id) {
-      fetchResumeFromDB();
-    } else {
-      setLoading(false);
-    }
-  }, [id]);
+    fetchResumeFromDB();
+  }, [id, user]);
+
+  // AUTOMATIC REAL-TIME AUTO-SAVE: Every change automatically persists to localStorage (and DB if resumeId exists)
+  useEffect(() => {
+    if (loading || !resumeData) return;
+
+    setAutoSaveStatus('saving');
+
+    const saveTimer = setTimeout(() => {
+      try {
+        const payloadToSave = {
+          ...resumeData,
+          selectedTemplate,
+          jobRole,
+          lastUpdated: new Date().toISOString()
+        };
+
+        const primaryKey = `resumeroast_builder_${resumeId || id || 'draft'}`;
+        localStorage.setItem(primaryKey, JSON.stringify(payloadToSave));
+        localStorage.setItem('resumeroast_builder_latest', JSON.stringify(payloadToSave));
+        localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
+
+        setAutoSaveStatus('saved');
+      } catch (err) {
+        console.error('Auto-save to localStorage failed:', err);
+        setAutoSaveStatus('saved');
+      }
+    }, 300);
+
+    return () => clearTimeout(saveTimer);
+  }, [resumeData, selectedTemplate, jobRole, resumeId, id, loading]);
 
   const fetchResumeFromDB = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/resume/${id}`);
-      if (res.data && res.data.resume) {
-        const dbResume = res.data.resume;
-        setResumeId(dbResume._id);
-        if (dbResume.jobRole) setJobRole(dbResume.jobRole);
-        if (dbResume.atsScore) setAtsScore(dbResume.atsScore);
-        if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
-        if (dbResume.improvedResume) {
+
+      // 1. Primary Load: Load from Supabase if user is logged in
+      if (user && user.id) {
+        const supabaseResume = await fetchLatestUserResumeFromSupabase(user);
+        if (supabaseResume && supabaseResume.resumeData) {
+          setResumeId(supabaseResume.id);
+          if (supabaseResume.jobRole) setJobRole(supabaseResume.jobRole);
+          if (supabaseResume.selectedTemplate) setSelectedTemplate(supabaseResume.selectedTemplate);
+          if (supabaseResume.atsScore) setAtsScore(supabaseResume.atsScore);
+
           setResumeData(prev => ({
             ...prev,
-            ...dbResume.improvedResume,
-            contactInfo: { ...prev.contactInfo, ...(dbResume.improvedResume.contactInfo || {}) }
+            ...supabaseResume.resumeData,
+            contactInfo: { ...prev.contactInfo, ...(supabaseResume.resumeData.contactInfo || {}) },
+            education: sanitizeEducationList(supabaseResume.resumeData.education || prev.education)
           }));
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 2. Fallback Load: Express/MongoDB API
+      if (id) {
+        const res = await api.get(`/resume/${id}`);
+        if (res.data && res.data.resume) {
+          const dbResume = res.data.resume;
+          setResumeId(dbResume._id);
+          if (dbResume.jobRole) setJobRole(dbResume.jobRole);
+          if (dbResume.atsScore) setAtsScore(dbResume.atsScore);
+          if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
+          if (dbResume.improvedResume) {
+            setResumeData(prev => ({
+              ...prev,
+              ...dbResume.improvedResume,
+              contactInfo: { ...prev.contactInfo, ...(dbResume.improvedResume.contactInfo || {}) },
+              education: sanitizeEducationList(dbResume.improvedResume.education || prev.education)
+            }));
+          }
         }
       }
     } catch (err) {
@@ -570,28 +644,61 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       setSaving(true);
       saveToLocalStorage(resumeData);
 
-      const payload = {
-        resumeId,
-        improvedResume: resumeData,
-        selectedTemplate,
-        jobRole
-      };
+      let savedToCloud = false;
 
-      const res = await api.put('/resume/update', payload);
-      if (res.data && res.data._id) {
-        setResumeId(res.data._id);
-        if (res.data.atsScore) {
-          setPreviousScore(atsScore);
-          setAtsScore(res.data.atsScore);
+      // 1. Primary Save: Supabase Database ('user_resumes' table)
+      if (user && user.id) {
+        try {
+          const result = await saveResumeBuilderToSupabase(user, resumeData, {
+            selectedTemplate,
+            jobRole,
+            atsScore
+          });
+          if (result && result.id) {
+            setResumeId(result.id);
+          }
+          savedToCloud = true;
+        } catch (supabaseErr) {
+          console.error('Supabase save error:', supabaseErr);
         }
       }
-      if (showToast) {
-        toast.success('Saved successfully!', { id: 'save-toast' });
+
+      // 2. Secondary Save: Express/MongoDB backend API
+      if (!savedToCloud) {
+        try {
+          const payload = {
+            resumeId,
+            improvedResume: resumeData,
+            selectedTemplate,
+            jobRole
+          };
+          const res = await api.put('/resume/update', payload);
+          if (res.data && res.data._id) {
+            setResumeId(res.data._id);
+            if (res.data.atsScore) {
+              setPreviousScore(atsScore);
+              setAtsScore(res.data.atsScore);
+            }
+          }
+          savedToCloud = true;
+        } catch (apiErr) {
+          console.error('Express API save error:', apiErr);
+        }
+      }
+
+      if (savedToCloud) {
+        if (showToast) {
+          toast.success('Saved successfully!', { id: 'save-toast' });
+        }
+      } else {
+        if (showToast) {
+          toast.error('Saved locally');
+        }
       }
     } catch (err) {
       console.error('Save error:', err);
       if (showToast) {
-        toast.error('Failed to save to database. Saved locally.');
+        toast.error('Saved locally');
       }
     } finally {
       setSaving(false);
@@ -600,7 +707,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
   const handleSaveAndNext = async () => {
     await handleSaveSection(false);
-    if (activeStep < 10) {
+    if (activeStep < 9) {
       setActiveStep(prev => prev + 1);
       toast.success('Section saved! Moving to next step.', { icon: '➔' });
     }
@@ -739,22 +846,20 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       case 1:
         return (resumeData.contactInfo.fullName && resumeData.contactInfo.email) ? 'completed' : 'pending';
       case 2:
-        return (resumeData.summary && resumeData.summary.length > 20) ? 'completed' : 'pending';
-      case 3:
         return (resumeData.skills && resumeData.skills.length > 0) ? 'completed' : 'pending';
-      case 4:
+      case 3:
         return (resumeData.experience && resumeData.experience.length > 0) ? 'completed' : 'pending';
-      case 5:
+      case 4:
         return (resumeData.projects && resumeData.projects.length > 0) ? 'completed' : 'pending';
-      case 6:
+      case 5:
         return (resumeData.education && resumeData.education.length > 0) ? 'completed' : 'pending';
-      case 7:
+      case 6:
         return (resumeData.certifications && resumeData.certifications.length > 0) ? 'completed' : 'pending';
-      case 8:
+      case 7:
         return (resumeData.achievements && resumeData.achievements.length > 0) ? 'completed' : 'pending';
+      case 8:
+        return (resumeData.summary && resumeData.summary.length > 20) ? 'completed' : 'pending';
       case 9:
-        return (resumeData.links && resumeData.links.length > 0) ? 'completed' : 'pending';
-      case 10:
         return 'completed';
       default:
         return 'pending';
@@ -827,8 +932,15 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           </div>
 
-          {/* ATS Score & Completion */}
+          {/* ATS Score & Auto Save */}
           <div className="flex items-center space-x-2 flex-shrink-0">
+            <div className="bg-slate-800/80 border border-slate-700/80 px-2 py-1 rounded-lg flex items-center space-x-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${autoSaveStatus === 'saving' ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`} />
+              <span className="text-[10px] text-slate-300 font-medium">
+                {autoSaveStatus === 'saving' ? 'Saving...' : 'Auto-saved'}
+              </span>
+            </div>
+
             <div className="bg-slate-800/80 border border-slate-700/80 px-2 py-1 rounded-lg flex items-center space-x-1.5">
               <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
               <div className="flex items-baseline space-x-1">
@@ -916,21 +1028,26 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             1. LEFT STEP SIDEBAR
         ================================================== */}
         <aside 
-          style={isDesktop ? { width: `${leftWidth}px`, flexShrink: 0 } : undefined}
-          className="w-full md:w-auto bg-slate-900/60 p-3 overflow-y-auto h-full min-h-0 border-b md:border-b-0 border-slate-800/80 transition-all duration-75 flex-shrink-0"
+          style={isDesktop ? { width: isSidebarCollapsed ? '68px' : `${leftWidth}px`, flexShrink: 0 } : undefined}
+          className="w-full md:w-auto bg-slate-900/60 p-2 overflow-y-auto h-full min-h-0 border-b md:border-b-0 border-slate-800/80 transition-all duration-150 flex-shrink-0"
         >
-          <div className="flex items-center justify-between px-3 py-2">
-            <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">
-              Builder Steps
-            </span>
+          <div className="flex items-center justify-between px-2 py-1.5 border-b border-slate-800/60 mb-2">
+            {!isSidebarCollapsed && (
+              <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400 truncate">
+                Builder Steps
+              </span>
+            )}
             <button
               type="button"
-              onClick={() => setImportModalOpen(true)}
-              className="text-[11px] text-orange-400 hover:text-orange-300 font-semibold flex items-center space-x-1 transition"
-              title="Import New Resume File"
+              onClick={() => setIsSidebarCollapsed(prev => !prev)}
+              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 transition flex items-center justify-center mx-auto md:ml-auto"
+              title={isSidebarCollapsed ? 'Expand Steps Menu' : 'Collapse Steps Menu'}
             >
-              <UploadCloud className="w-3.5 h-3.5" />
-              <span>Import</span>
+              {isSidebarCollapsed ? (
+                <PanelLeftOpen className="w-4 h-4 text-orange-400" />
+              ) : (
+                <PanelLeftClose className="w-4 h-4 text-slate-400" />
+              )}
             </button>
           </div>
           
@@ -942,44 +1059,53 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                 <button
                   key={step.id}
                   onClick={() => setActiveStep(step.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition ${
+                  title={isSidebarCollapsed ? `${step.number}. ${step.name}` : undefined}
+                  className={`w-full flex items-center justify-between px-2.5 py-2.5 rounded-xl text-xs font-medium transition ${
                     activeStep === step.id
                       ? 'bg-gradient-to-r from-orange-500/20 to-amber-500/10 text-orange-400 border border-orange-500/30 font-semibold'
                       : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
                   }`}
                 >
-                  <div className="flex items-center space-x-2.5 truncate">
-                    <span className="text-[10px] font-mono text-slate-500 font-bold">{step.number}</span>
-                    <IconComp className={`w-4 h-4 ${activeStep === step.id ? 'text-orange-400' : 'text-slate-400'}`} />
-                    <span className="truncate">{step.name}</span>
+                  <div className="flex items-center space-x-2.5 truncate mx-auto md:mx-0">
+                    {!isSidebarCollapsed && (
+                      <span className="text-[10px] font-mono text-slate-500 font-bold">{step.number}</span>
+                    )}
+                    <IconComp className={`w-4 h-4 flex-shrink-0 ${activeStep === step.id ? 'text-orange-400' : 'text-slate-400'}`} />
+                    {!isSidebarCollapsed && (
+                      <span className="truncate">{step.name}</span>
+                    )}
                   </div>
 
-                  <div className="ml-2 flex-shrink-0">
-                    {status === 'completed' && (
-                      <span className="text-emerald-400 font-bold text-xs" title="Completed">✓</span>
-                    )}
-                    {status === 'current' && (
-                      <span className="text-orange-400 font-bold text-xs" title="Current">●</span>
-                    )}
-                    {status === 'pending' && (
-                      <span className="text-slate-600 font-bold text-xs" title="Not completed">○</span>
-                    )}
-                  </div>
+                  {!isSidebarCollapsed && (
+                    <div className="ml-2 flex-shrink-0">
+                      {status === 'completed' && (
+                        <span className="text-emerald-400 font-bold text-xs" title="Completed">✓</span>
+                      )}
+                      {status === 'current' && (
+                        <span className="text-orange-400 font-bold text-xs" title="Current">●</span>
+                      )}
+                      {status === 'pending' && (
+                        <span className="text-slate-600 font-bold text-xs" title="Not completed">○</span>
+                      )}
+                    </div>
+                  )}
                 </button>
               );
             })}
           </nav>
 
           {/* Quick AI Advice Box */}
-          <div className="mt-6 bg-slate-800/50 border border-slate-700/60 rounded-xl p-3 text-xs text-slate-300 space-y-2">
-            <div className="flex items-center space-x-1.5 text-amber-400 font-bold text-[11px] uppercase tracking-wider">
-              <Zap className="w-3.5 h-3.5" />
-              <span>Role Advice</span>
+          {!isSidebarCollapsed && (
+            <div className="mt-6 bg-slate-800/50 border border-slate-700/60 rounded-xl p-3 text-xs text-slate-300 space-y-2">
+              <div className="flex items-center space-x-1.5 text-amber-400 font-bold text-[11px] uppercase tracking-wider">
+                <Zap className="w-3.5 h-3.5" />
+                <span>Role Advice</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-slate-400">
+                For <strong className="text-slate-200">{jobRole}</strong>, emphasize technical stack, quantifiable metrics, and GitHub project repository links.
+              </p>
             </div>
-            <p className="text-[11px] leading-relaxed text-slate-400">
-              For <strong className="text-slate-200">{jobRole}</strong>, emphasize technical stack, quantifiable metrics, and GitHub project repository links.
-            </p>
-          </div>
+          )}
         </aside>
 
         {/* LEFT RESIZER DIVIDER (↔️ Drag to resize) */}
@@ -1386,89 +1512,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 02: SUMMARY */}
+          {/* STEP 02: SKILLS */}
           {activeStep === 2 && (
-            <div className="space-y-5 animate-fadeIn">
-              <div>
-                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
-                  <FileText className="w-5 h-5 text-orange-400" />
-                  <span>Professional Summary</span>
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">Craft a compelling summary tailored for {jobRole}.</p>
-              </div>
-
-              {/* Large Text Editor */}
-              <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>ATS Keyword Match: <strong className="text-emerald-400">82%</strong></span>
-                  <span>{resumeData.summary.length} chars</span>
-                </div>
-
-                <textarea
-                  rows={6}
-                  value={resumeData.summary}
-                  onChange={(e) => setResumeData(prev => ({ ...prev, summary: e.target.value }))}
-                  className="w-full bg-slate-800 text-white text-xs rounded-xl p-3 border border-slate-700 focus:outline-none focus:border-orange-500 leading-relaxed font-sans"
-                  placeholder="Enter your professional summary..."
-                />
-
-                {/* AI Prompt Buttons */}
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'generate', resumeData.summary, { section: 'summary' })}
-                    className="bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 hover:brightness-110 transition"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
-                    <span>Generate with AI</span>
-                  </button>
-
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'improve', resumeData.summary, { section: 'summary' })}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
-                  >
-                    <span>✨ Improve</span>
-                  </button>
-
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'ats_optimize', resumeData.summary, { section: 'summary' })}
-                    className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
-                  >
-                    <span>✨ ATS Optimize</span>
-                  </button>
-
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'rewrite', resumeData.summary, { section: 'summary' })}
-                    className="bg-slate-800 hover:bg-slate-700 text-blue-400 border border-blue-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
-                  >
-                    <span>✨ Rewrite</span>
-                  </button>
-
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'shorten', resumeData.summary, { section: 'summary' })}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
-                  >
-                    <span>✨ Shorten</span>
-                  </button>
-
-                  <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'expand', resumeData.summary, { section: 'summary' })}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
-                  >
-                    <span>✨ Expand</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* STEP 03: SKILLS */}
-          {activeStep === 3 && (
             <div className="space-y-5 animate-fadeIn">
               <div>
                 <h2 className="text-lg font-bold text-white flex items-center space-x-2">
@@ -1700,8 +1745,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 04: EXPERIENCE */}
-          {activeStep === 4 && (
+          {/* STEP 03: EXPERIENCE */}
+          {activeStep === 3 && (
             <div className="space-y-5 animate-fadeIn">
               <div className="flex items-center justify-between">
                 <div>
@@ -1889,8 +1934,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 05: PROJECTS */}
-          {activeStep === 5 && (
+          {/* STEP 04: PROJECTS */}
+          {activeStep === 4 && (
             <div className="space-y-5 animate-fadeIn">
               <div className="flex items-center justify-between">
                 <div>
@@ -2067,18 +2112,19 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 06: EDUCATION */}
-          {activeStep === 6 && (
-            <div className="space-y-5 animate-fadeIn">
-              <div className="flex items-center justify-between">
+          {/* STEP 05: EDUCATION */}
+          {activeStep === 5 && (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                 <div>
-                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                  <h2 className="text-lg font-extrabold text-white flex items-center space-x-2 tracking-tight">
                     <GraduationCap className="w-5 h-5 text-orange-400" />
                     <span>Education</span>
                   </h2>
-                  <p className="text-xs text-slate-400 mt-1">Degrees, college background, and relevant coursework.</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Degrees, college/school background, and relevant coursework.</p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => {
                     setResumeData(prev => ({
                       ...prev,
@@ -2086,8 +2132,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                         ...(prev.education || []),
                         {
                           institution: '',
-                          degree: 'B.Tech',
-                          branch: 'Computer Science',
+                          degree: '',
+                          branch: '',
                           gpa: '',
                           startYear: '',
                           endYear: '',
@@ -2097,143 +2143,188 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                       ]
                     }));
                   }}
-                  className="bg-orange-500 hover:bg-orange-600 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1"
+                  className="bg-orange-500 hover:bg-orange-600 active:scale-95 text-slate-950 font-extrabold text-xs px-4 py-2 rounded-xl flex items-center space-x-1.5 shadow-md shadow-orange-500/20 transition-all"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-4 h-4" />
                   <span>Add Education</span>
                 </button>
               </div>
 
-              {(resumeData.education || []).map((edu, eduIdx) => (
-                <div key={eduIdx} className="bg-slate-900/70 border border-slate-800 p-4 rounded-xl space-y-3">
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                    <span className="text-xs font-bold text-orange-400">Education #{eduIdx + 1}</span>
-                    <button
-                      onClick={() => {
-                        const updated = resumeData.education.filter((_, i) => i !== eduIdx);
-                        setResumeData(prev => ({ ...prev, education: updated }));
-                      }}
-                      className="text-slate-500 hover:text-red-400 text-xs flex items-center space-x-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Remove</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">College / University</label>
-                      <input
-                        type="text"
-                        value={edu.institution}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].institution = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="University name"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">Degree</label>
-                      <input
-                        type="text"
-                        value={edu.degree}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].degree = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="e.g. B.Tech"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">Branch / Major</label>
-                      <input
-                        type="text"
-                        value={edu.branch}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].branch = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="Computer Science"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">CGPA / Percentage</label>
-                      <input
-                        type="text"
-                        value={edu.gpa}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].gpa = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="8.45 CGPA"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">Start Year</label>
-                      <input
-                        type="text"
-                        value={edu.startYear || ''}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].startYear = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="2021"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">End Year</label>
-                      <input
-                        type="text"
-                        value={edu.endYear || ''}
-                        onChange={(e) => {
-                          const updated = [...resumeData.education];
-                          updated[eduIdx].endYear = e.target.value;
-                          setResumeData(prev => ({ ...prev, education: updated }));
-                        }}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                        placeholder="2025"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Coursework */}
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Relevant Coursework (comma separated)</label>
-                    <input
-                      type="text"
-                      value={Array.isArray(edu.relevantCoursework) ? edu.relevantCoursework.join(', ') : edu.relevantCoursework || ''}
-                      onChange={(e) => {
-                        const updated = [...resumeData.education];
-                        updated[eduIdx].relevantCoursework = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-                        setResumeData(prev => ({ ...prev, education: updated }));
-                      }}
-                      className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                      placeholder="Data Structures, DBMS, Operating Systems"
-                    />
-                  </div>
+              {(resumeData.education || []).length === 0 ? (
+                <div className="text-center py-10 bg-slate-900/40 rounded-2xl border border-dashed border-slate-800 space-y-3">
+                  <GraduationCap className="w-10 h-10 text-slate-600 mx-auto opacity-50" />
+                  <p className="text-xs text-slate-400">No education entries added yet.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResumeData(prev => ({
+                        ...prev,
+                        education: [
+                          {
+                            institution: '',
+                            degree: 'Bachelor of Technology',
+                            branch: 'Computer Science',
+                            gpa: '',
+                            startYear: '',
+                            endYear: '',
+                            location: '',
+                            relevantCoursework: []
+                          }
+                        ]
+                      }));
+                    }}
+                    className="inline-flex items-center space-x-1.5 text-xs font-bold text-orange-400 hover:underline"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add your first education entry</span>
+                  </button>
                 </div>
-              ))}
+              ) : (
+                (resumeData.education || []).map((edu, eduIdx) => (
+                  <div key={eduIdx} className="bg-slate-900/90 border border-slate-800 hover:border-slate-700/80 p-5 rounded-2xl space-y-4 shadow-xl backdrop-blur-sm relative transition-all">
+                    <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-orange-400 font-bold text-xs">
+                          {eduIdx + 1}
+                        </div>
+                        <span className="text-xs font-extrabold text-white tracking-wide">
+                          {edu.degree || edu.institution ? `${edu.degree || 'Education'}${edu.institution ? ` • ${edu.institution}` : ''}` : `Education Record #${eduIdx + 1}`}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = resumeData.education.filter((_, i) => i !== eduIdx);
+                          setResumeData(prev => ({ ...prev, education: updated }));
+                        }}
+                        className="text-slate-400 hover:text-rose-400 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-slate-950/70 border border-slate-800 hover:border-rose-900/50 flex items-center space-x-1.5 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* College / University */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">College / University</label>
+                        <input
+                          type="text"
+                          value={edu.institution || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].institution = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. GLA University, Mathura"
+                        />
+                      </div>
+
+                      {/* Degree */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Degree</label>
+                        <input
+                          type="text"
+                          value={edu.degree || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].degree = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. Bachelor of Technology / Intermediate / High School"
+                        />
+                      </div>
+
+                      {/* Branch / Major */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Branch / Major</label>
+                        <input
+                          type="text"
+                          value={edu.branch || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].branch = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. Computer Science"
+                        />
+                      </div>
+
+                      {/* CGPA / Percentage */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">CGPA / Percentage</label>
+                        <input
+                          type="text"
+                          value={edu.gpa || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].gpa = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. 8.45 CGPA or 85%"
+                        />
+                      </div>
+
+                      {/* Start Year */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Start Year</label>
+                        <input
+                          type="text"
+                          value={edu.startYear || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].startYear = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. 2024"
+                        />
+                      </div>
+
+                      {/* End Year */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">End Year</label>
+                        <input
+                          type="text"
+                          value={edu.endYear || ''}
+                          onChange={(e) => {
+                            const updated = [...resumeData.education];
+                            updated[eduIdx].endYear = e.target.value;
+                            setResumeData(prev => ({ ...prev, education: updated }));
+                          }}
+                          className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                          placeholder="e.g. 2028"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Relevant Coursework */}
+                    <div className="space-y-1.5 pt-1">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Relevant Coursework (comma separated)</label>
+                      <input
+                        type="text"
+                        value={Array.isArray(edu.relevantCoursework) ? edu.relevantCoursework.join(', ') : edu.relevantCoursework || ''}
+                        onChange={(e) => {
+                          const updated = [...resumeData.education];
+                          updated[eduIdx].relevantCoursework = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                          setResumeData(prev => ({ ...prev, education: updated }));
+                        }}
+                        className="w-full bg-slate-950 text-white text-xs font-medium rounded-xl px-3.5 py-2.5 border border-slate-800 hover:border-slate-700 focus:border-orange-500 focus:outline-none transition-colors"
+                        placeholder="e.g. Data Structures, DBMS, Operating Systems, Computer Networks"
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
 
-          {/* STEP 07: CERTIFICATIONS */}
-          {activeStep === 7 && (
+          {/* STEP 06: CERTIFICATIONS */}
+          {activeStep === 6 && (
             <div className="space-y-5 animate-fadeIn">
               <div className="flex items-center justify-between">
                 <div>
@@ -2385,8 +2476,89 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 08: ACHIEVEMENTS */}
+          {/* STEP 08: SUMMARY */}
           {activeStep === 8 && (
+            <div className="space-y-5 animate-fadeIn">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                  <FileText className="w-5 h-5 text-orange-400" />
+                  <span>Professional Summary</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">Craft a compelling summary tailored for {jobRole}.</p>
+              </div>
+
+              {/* Large Text Editor */}
+              <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>ATS Keyword Match: <strong className="text-emerald-400">82%</strong></span>
+                  <span>{resumeData.summary.length} chars</span>
+                </div>
+
+                <textarea
+                  rows={6}
+                  value={resumeData.summary}
+                  onChange={(e) => setResumeData(prev => ({ ...prev, summary: e.target.value }))}
+                  className="w-full bg-slate-800 text-white text-xs rounded-xl p-3 border border-slate-700 focus:outline-none focus:border-orange-500 leading-relaxed font-sans"
+                  placeholder="Enter your professional summary..."
+                />
+
+                {/* AI Prompt Buttons */}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'generate', resumeData.summary, { section: 'summary' })}
+                    className="bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 hover:brightness-110 transition"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
+                    <span>Generate with AI</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'improve', resumeData.summary, { section: 'summary' })}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
+                  >
+                    <span>✨ Improve</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'ats_optimize', resumeData.summary, { section: 'summary' })}
+                    className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
+                  >
+                    <span>✨ ATS Optimize</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'rewrite', resumeData.summary, { section: 'summary' })}
+                    className="bg-slate-800 hover:bg-slate-700 text-blue-400 border border-blue-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
+                  >
+                    <span>✨ Rewrite</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'shorten', resumeData.summary, { section: 'summary' })}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
+                  >
+                    <span>✨ Shorten</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading}
+                    onClick={() => triggerAIAction('summary', 'expand', resumeData.summary, { section: 'summary' })}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
+                  >
+                    <span>✨ Expand</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 07: ACHIEVEMENTS */}
+          {activeStep === 7 && (
             <div className="space-y-5 animate-fadeIn">
               <div className="flex items-center justify-between">
                 <div>
@@ -2491,77 +2663,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </div>
           )}
 
-          {/* STEP 09: LINKS */}
+          {/* STEP 09: REVIEW & EXPORT */}
           {activeStep === 9 && (
-            <div className="space-y-5 animate-fadeIn">
-              <div>
-                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
-                  <LinkIcon className="w-5 h-5 text-orange-400" />
-                  <span>Custom Links</span>
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">Add profiles like LeetCode, CodeChef, Medium, or personal website.</p>
-              </div>
-
-              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-xl space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-bold text-slate-300">Dedicated Links</span>
-                  <button
-                    onClick={() => {
-                      setResumeData(prev => ({
-                        ...prev,
-                        links: [...(prev.links || []), { heading: 'LeetCode', url: '' }]
-                      }));
-                    }}
-                    className="bg-orange-500 hover:bg-orange-600 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add New Link</span>
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {(resumeData.links || []).map((link, lIdx) => (
-                    <div key={lIdx} className="flex items-center space-x-2 bg-slate-800/80 p-2 rounded-xl">
-                      <select
-                        value={link.heading}
-                        onChange={(e) => {
-                          const updated = [...(resumeData.links || [])];
-                          updated[lIdx].heading = e.target.value;
-                          setResumeData(prev => ({ ...prev, links: updated }));
-                        }}
-                        className="bg-slate-900 text-white text-xs rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none"
-                      >
-                        {PRESET_LINK_PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                      <input
-                        type="text"
-                        value={link.url}
-                        onChange={(e) => {
-                          const updated = [...(resumeData.links || [])];
-                          updated[lIdx].url = e.target.value;
-                          setResumeData(prev => ({ ...prev, links: updated }));
-                        }}
-                        className="flex-1 bg-slate-900 text-white text-xs rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none"
-                        placeholder="leetcode.com/u/username"
-                      />
-                      <button
-                        onClick={() => {
-                          const updated = (resumeData.links || []).filter((_, i) => i !== lIdx);
-                          setResumeData(prev => ({ ...prev, links: updated }));
-                        }}
-                        className="text-slate-500 hover:text-red-400 p-1"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* STEP 10: REVIEW & EXPORT */}
-          {activeStep === 10 && (
             <div className="space-y-5 animate-fadeIn">
               <div>
                 <h2 className="text-lg font-bold text-white flex items-center space-x-2">

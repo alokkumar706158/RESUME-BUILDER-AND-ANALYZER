@@ -1,4 +1,5 @@
 import React from 'react';
+import { sanitizeEducationList } from '../../utils/educationSanitizer';
 
 const RecommendedATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
@@ -9,10 +10,6 @@ const RecommendedATSTemplate = ({ data = {} }) => {
   const github = contact.github || '';
   const portfolio = contact.portfolio || '';
   const address = contact.address || '';
-
-  const customLinks = Array.isArray(contact.customLinks) ? contact.customLinks.filter(l => l.heading && l.url) : [];
-  const dedicatedLinks = Array.isArray(data.links) ? data.links.filter(l => l.heading && l.url) : [];
-  const allCustomLinks = [...customLinks, ...dedicatedLinks];
 
   // Address and Contact String
   const contactDetails = [address, phone, email].filter(Boolean).join(', ');
@@ -120,23 +117,7 @@ const RecommendedATSTemplate = ({ data = {} }) => {
                 {portfolio}
               </a>
             </div>
-          )}
-
-          {/* Custom Links */}
-          {allCustomLinks.map((link, idx) => (
-            <div key={idx} className="text-[11.5px] text-[#a16207] font-medium">
-              <span>{link.heading ? `${link.heading}: ` : ''}</span>
-              <a 
-                href={link.url.startsWith('http') ? link.url : `https://${link.url}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="underline text-[#a16207] hover:opacity-80"
-              >
-                {link.url}
-              </a>
-            </div>
-          ))}
-        </div>
+          )}        </div>
       </div>
 
       {/* SUMMARY (If present) */}
@@ -158,20 +139,39 @@ const RecommendedATSTemplate = ({ data = {} }) => {
             EDUCATION
           </h2>
           <div className="space-y-2">
-            {data.education.map((edu, idx) => {
+            {sanitizeEducationList(data.education).map((edu, idx) => {
               if (!edu.institution && !edu.degree) return null;
-              const years = edu.startYear && edu.endYear ? `${edu.startYear} - ${edu.endYear}` : (edu.endYear || edu.startYear || edu.duration);
+
+              const cleanVal = (val) => {
+                if (!val) return '';
+                const s = String(val).trim();
+                return (s.toLowerCase() === 'null' || s.toLowerCase() === 'n/a') ? '' : s;
+              };
+
+              const startY = cleanVal(edu.startYear);
+              const endY = cleanVal(edu.endYear);
+              const dur = cleanVal(edu.duration);
+              const yearDisplay = endY 
+                ? (startY ? `${startY} - ${endY}` : endY)
+                : (startY || dur);
+
+              const gpaDisplay = cleanVal(edu.gpa);
+
+              const degreeStr = edu.degree || '';
+              const branchStr = edu.branch && !degreeStr.toLowerCase().includes(edu.branch.toLowerCase())
+                ? ` in ${edu.branch}`
+                : '';
+
               return (
                 <div key={idx} className="text-slate-900">
                   <div className="flex justify-between items-baseline">
                     <div className="text-[12px]">
-                      <span className="font-bold">{edu.degree}</span>
-                      {edu.branch && <span className="font-bold"> in {edu.branch}</span>}
-                      {edu.institution && <span className="italic">, {edu.institution}</span>}
+                      <span className="font-bold">{degreeStr}{branchStr}</span>
+                      {edu.institution && <span>, {edu.institution}</span>}
                       {edu.location && <span>, {edu.location}</span>}
-                      {edu.gpa && <span className="font-bold">, {edu.gpa}</span>}
+                      {gpaDisplay && <span className="font-semibold"> ({gpaDisplay})</span>}
                     </div>
-                    {years && <span className="font-normal text-[12px] text-slate-800 flex-shrink-0 ml-4">{years}</span>}
+                    {yearDisplay && <span className="font-normal text-[12px] text-slate-800 flex-shrink-0 ml-4">— {yearDisplay}</span>}
                   </div>
                   {Array.isArray(edu.relevantCoursework) && edu.relevantCoursework.length > 0 && (
                     <div className="text-[11.5px] text-slate-800 mt-0.5 pl-2">
@@ -349,11 +349,11 @@ const RecommendedATSTemplate = ({ data = {} }) => {
         </div>
       )}
 
-      {/* 7. CO-CURRICULAR ACTIVITIES */}
+      {/* 7. CERTIFICATIONS */}
       {coCurricularList.length > 0 && (
         <div className="mb-5">
           <h2 className="text-[13px] font-bold uppercase tracking-wider text-[#0f4c81] border-b border-[#0f4c81] pb-0.5 mb-2">
-            CO-CURRICULAR ACTIVITIES
+            CERTIFICATIONS
           </h2>
           <ul className="list-disc pl-5 space-y-1 text-slate-900 text-[12px]">
             {coCurricularList.map((item, idx) => {

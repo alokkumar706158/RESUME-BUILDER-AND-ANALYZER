@@ -68,6 +68,9 @@ export const registerUser = async (req, res) => {
     });
   } catch (error) {
     console.error('Register Error:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'User already exists with this email' });
+    }
     res.status(500).json({ message: error.message || 'Server error during registration' });
   }
 };
@@ -132,7 +135,7 @@ export const loginUser = async (req, res) => {
 };
 
 export const logoutUser = async (req, res) => {
-  const { refreshToken } = req.cookies;
+  const { refreshToken } = req.cookies || {};
   if (refreshToken) {
     await User.findOneAndUpdate({ refreshToken }, { refreshToken: '' });
   }
@@ -196,7 +199,7 @@ export const updateProfile = async (req, res) => {
 };
 
 export const refreshAccessToken = async (req, res) => {
-  const { refreshToken } = req.cookies;
+  const { refreshToken } = req.cookies || {};
   if (!refreshToken) {
     return res.status(401).json({ message: 'Not authorized, no refresh token' });
   }

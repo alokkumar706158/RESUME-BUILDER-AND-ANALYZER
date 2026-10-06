@@ -16,12 +16,10 @@ export const generateResumeDOCX = async (resumeData, user) => {
   const linkedin = contact.linkedin || '';
   const github = contact.github || '';
   const portfolio = contact.portfolio || '';
-  const customLinks = Array.isArray(contact.customLinks) ? contact.customLinks.filter(l => l.url) : [];
   const allLinks = [
     linkedin,
     github,
-    portfolio,
-    ...customLinks.map(l => l.heading ? `${l.heading}: ${l.url}` : l.url)
+    portfolio
   ].filter(Boolean);
   const emailPhoneLine = [email, phone].filter(Boolean).join('  |  ');
 

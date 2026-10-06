@@ -33,22 +33,22 @@ const detectPortfolio = (text) =>
   detectUrl(text, /https?:\/\/(www\.)?[A-Z0-9.-]+\.[A-Z]{2,}(\/[^\s)]*)?/i);
 
 const sectionPatterns = {
-  summary: /(summary|professional summary|profile|objective)\b/i,
-  skills: /(skills|technical skills|core skills)\b/i,
-  projects: /(projects|project experience|personal projects)\b/i,
-  experience: /(experience|work experience|employment|professional experience|internship)\b/i,
-  education: /(education|academics)\b/i,
-  achievements: /(achievements|accomplishments|awards|honors|leadership|extra[-\s]?curricular)\b/i,
-  certifications: /(certifications|certificates|licenses)\b/i
+  summary: /^(summary|professional summary|profile|objective)\b/i,
+  skills: /^(skills|technical skills|core skills|key skills|technical competencies)\b/i,
+  projects: /^(projects|project experience|personal projects|academic projects)\b/i,
+  experience: /^(experience|work experience|employment|professional experience|internship|internships|internship\s*[\/\\]?|training)\b/i,
+  education: /^(education|academics|educational background|qualifications)\b/i,
+  achievements: /^(achievements|accomplishments|awards|honors|leadership|extra[-\s]?curricular)\b/i,
+  certifications: /^(certifications|certificates|licenses|certifications and licenses)\b/i
 };
 
 const findSectionLineIndexes = (lines) => {
   const indexes = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i].trim();
     for (const [key, pattern] of Object.entries(sectionPatterns)) {
-      if (pattern.test(line) && line.length <= 40) {
-        indexes.push({ key, i });
+      if (pattern.test(line) && (line.length <= 40 || line.includes(':') || line.includes(' - '))) {
+        indexes.push({ key, i, headingLine: line });
         break;
       }
     }
@@ -69,10 +69,15 @@ const sliceSections = (lines) => {
   const idx = findSectionLineIndexes(lines);
   const sections = {};
   for (let s = 0; s < idx.length; s++) {
-    const { key, i } = idx[s];
+    const { key, i, headingLine } = idx[s];
+    const headingClean = headingLine && headingLine.includes(':') 
+      ? headingLine.split(':').slice(1).join(':').trim() 
+      : '';
     const start = i + 1;
     const end = s + 1 < idx.length ? idx[s + 1].i : lines.length;
-    sections[key] = lines.slice(start, end).join('\n').trim();
+    const rest = lines.slice(start, end);
+    const combined = [headingClean, ...rest].filter(Boolean).join('\n').trim();
+    sections[key] = combined;
   }
   return sections;
 };
@@ -451,22 +456,61 @@ export const analyzeResumeTextLocally = (resumeText, jobRole) => {
   }
 
   // Parse Education from text
-  const eduText = sections.education || '';
-  const eduLines = toLines(eduText);
+  const rawEduText = (sections.education || '')
+    .replace(/(INTERNSHIP|TRAINING|WORK EXPERIENCE)[\s\S]*/i, '')
+    .replace(/Octanet[\s\S]*/i, '')
+    .replace(/_+/g, '');
+
+  const degreeSplitRegex = /(?=(?:Bachelor\s+of\s+Technology|B\.?Tech|Intermediate|High\s*School|Class\s*XII|Class\s*X|Secondary))/i;
+
+  const eduLines = [];
+  toLines(rawEduText).forEach((line) => {
+    const subLines = line.split(degreeSplitRegex).map((s) => s.trim()).filter(Boolean);
+    eduLines.push(...subLines);
+  });
+
   const parsedEducation = [];
   let currentEdu = null;
 
   eduLines.forEach((line) => {
-    const isDegree = /b\.?tech|b\.?e\.?|m\.?tech|m\.?c\.?a\.?|b\.?c\.?a\.?|bachelor|master|diploma|degree|phd|high school|hsc|ssc/i.test(line);
+    if (/^(internship|training|octanet|work experience)/i.test(line)) return;
+
+    const isDegree = /b\.?tech|b\.?e\.?|m\.?tech|m\.?c\.?a\.?|b\.?c\.?a\.?|b\.?a\.?|b\.?sc|b\.?com|bachelor|master|diploma|degree|phd|high\s*school|hsc|ssc|intermediate|senior\s*secondary|secondary|12th|10th|class\s*xii|class\s*x|academy|school/i.test(line);
     if (isDegree || !currentEdu) {
       if (currentEdu && (currentEdu.institution || currentEdu.degree)) {
         parsedEducation.push(currentEdu);
       }
+      
+      const parts = line.split(/[,|–-]/).map(p => p.trim()).filter(Boolean);
+      let degreeStr = parts[0] || line;
+      let branchStr = '';
+      if (degreeStr.toLowerCase().includes(' in ')) {
+        const degParts = degreeStr.split(/\s+in\s+/i);
+        degreeStr = degParts[0];
+        branchStr = degParts[1] || '';
+      }
+
+      // Extract numeric GPA if present in parts
+      let extractedGpa = findFirstMatch(line, /\b(cgpa|gpa|percentage|%|marks)[\s:]*([0-9.]+)/i);
+      if (!extractedGpa) {
+        parts.forEach(p => {
+          const numMatch = p.match(/\b(\d{1,2}(\.\d+)?%?)\b/);
+          if (numMatch && Number(numMatch[1]) <= 100 && !p.toLowerCase().includes('202') && !p.toLowerCase().includes('201')) {
+            extractedGpa = numMatch[1];
+          }
+        });
+      }
+
       currentEdu = {
-        degree: line,
-        institution: '',
+        degree: degreeStr,
+        branch: branchStr,
+        institution: parts[1] || '',
+        location: parts[2] && !/\b(19|20)\d{2}\b/.test(parts[2]) ? parts[2] : '',
+        startYear: '',
+        endYear: findFirstMatch(line, /\b(19|20)\d{2}\b/) || '',
         duration: findFirstMatch(line, /\b(19|20)\d{2}\s*[-–]\s*((19|20)\d{2}|present|current)\b/i) || '',
-        gpa: findFirstMatch(line, /\b(cgpa|gpa|percentage|%|marks)[\s:]*([0-9.]+)/i) || ''
+        gpa: extractedGpa || '',
+        relevantCoursework: []
       };
     } else if (currentEdu) {
       if (!currentEdu.institution) {
@@ -480,12 +524,22 @@ export const analyzeResumeTextLocally = (resumeText, jobRole) => {
     parsedEducation.push(currentEdu);
   }
 
+  const cleanEducation = parsedEducation.filter((edu) => {
+    const d = (edu.degree || '').toLowerCase();
+    const inst = (edu.institution || '').toLowerCase();
+    return !d.includes('internship') && !d.includes('octanet') && !inst.includes('octanet');
+  });
+
   // Parse Certifications & Achievements
   const certText = sections.certifications || '';
-  const parsedCertifications = toLines(certText).map(c => ({ name: c.replace(/^[-\s•*]+/, '').trim() }));
+  const parsedCertifications = toLines(certText)
+    .filter(c => !/^(certifications|certificates|licenses)$/i.test(c.trim()))
+    .map(c => ({ name: c.replace(/^[-\s•*]+/, '').trim() }));
 
   const achText = sections.achievements || '';
-  const parsedAchievements = toLines(achText).map(a => ({ title: a.replace(/^[-\s•*]+/, '').trim(), description: '' }));
+  const parsedAchievements = toLines(achText)
+    .filter(a => !/^(achievements|accomplishments|awards|honors)$/i.test(a.trim()))
+    .map(a => ({ title: a.replace(/^[-\s•*]+/, '').trim(), description: '' }));
 
   const extractedName = lines.length > 0 && lines[0].split(/\s+/).length <= 5 ? lines[0] : 'ALOK KUMAR';
 
@@ -632,7 +686,7 @@ export const analyzeResumeTextLocally = (resumeText, jobRole) => {
       skills: parsedSkills,
       experience: parsedExperience,
       projects: parsedProjects,
-      education: parsedEducation,
+      education: cleanEducation,
       achievements: parsedAchievements,
       certifications: parsedCertifications
     },

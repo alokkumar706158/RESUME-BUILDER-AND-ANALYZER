@@ -1,4 +1,5 @@
 import React from 'react';
+import { sanitizeEducationList } from '../../utils/educationSanitizer';
 
 const StarRating = ({ rating = 5 }) => {
   const stars = [];
@@ -78,9 +79,6 @@ const ModernATSTemplate = ({ data = {} }) => {
             {linkedin && <div className="truncate font-medium text-slate-200">🔗 {linkedin}</div>}
             {github && <div className="truncate">💻 {github}</div>}
             {portfolio && <div className="truncate">🌐 {portfolio}</div>}
-            {allCustomLinks.map((link, idx) => (
-              <div key={idx} className="truncate">🔗 {link.heading ? `${link.heading}: ` : ''}{link.url}</div>
-            ))}
           </div>
 
           {/* SKILLS WITH STAR RATINGS (★★★★★) - NO PERCENTAGE BARS */}
@@ -212,19 +210,40 @@ const ModernATSTemplate = ({ data = {} }) => {
               Education
             </h2>
             <div className="space-y-2">
-              {data.education.map((edu, idx) => {
+              {sanitizeEducationList(data.education).map((edu, idx) => {
                 if (!edu.institution && !edu.degree) return null;
-                const years = edu.startYear && edu.endYear ? `${edu.startYear} - ${edu.endYear}` : edu.duration;
+
+                const cleanVal = (val) => {
+                  if (!val) return '';
+                  const s = String(val).trim();
+                  return (s.toLowerCase() === 'null' || s.toLowerCase() === 'n/a') ? '' : s;
+                };
+
+                const startY = cleanVal(edu.startYear);
+                const endY = cleanVal(edu.endYear);
+                const dur = cleanVal(edu.duration);
+                const yearDisplay = endY 
+                  ? (startY ? `${startY} - ${endY}` : endY)
+                  : (startY || dur);
+
+                const gpaDisplay = cleanVal(edu.gpa);
+
+                const degreeStr = edu.degree || '';
+                const branchStr = edu.branch && !degreeStr.toLowerCase().includes(edu.branch.toLowerCase())
+                  ? ` in ${edu.branch}`
+                  : '';
+
                 return (
                   <div key={idx} className="space-y-0.5">
                     <div className="flex justify-between items-baseline font-bold text-slate-900">
                       <span>
-                        {edu.degree} {edu.branch && `in ${edu.branch}`}
-                        {edu.institution && <span className="font-normal text-slate-700"> — {edu.institution}</span>}
+                        {degreeStr}{branchStr}
+                        {edu.institution && <span className="font-normal text-slate-700">, {edu.institution}</span>}
+                        {edu.location && <span className="font-normal text-slate-600">, {edu.location}</span>}
                       </span>
-                      {years && <span className="text-[11px] font-normal text-slate-500">{years}</span>}
+                      {yearDisplay && <span className="text-[11px] font-normal text-slate-500 ml-4 flex-shrink-0">— {yearDisplay}</span>}
                     </div>
-                    {edu.gpa && <div className="text-[11px] text-slate-600">CGPA/Percentage: {edu.gpa}</div>}
+                    {gpaDisplay && <div className="text-[11px] text-slate-600">CGPA/Percentage: {gpaDisplay}</div>}
                     {Array.isArray(edu.relevantCoursework) && edu.relevantCoursework.length > 0 && (
                       <div className="text-[11px] text-slate-600">
                         <span className="font-semibold text-slate-700">Coursework: </span>

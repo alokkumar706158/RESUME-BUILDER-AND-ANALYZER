@@ -1,4 +1,5 @@
 import React from 'react';
+import { sanitizeEducationList } from '../../utils/educationSanitizer';
 
 const ClassicATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
@@ -10,18 +11,13 @@ const ClassicATSTemplate = ({ data = {} }) => {
   const portfolio = contact.portfolio || '';
   const address = contact.address || '';
 
-  const customLinks = Array.isArray(contact.customLinks) ? contact.customLinks.filter(l => l.heading && l.url) : [];
-  const dedicatedLinks = Array.isArray(data.links) ? data.links.filter(l => l.heading && l.url) : [];
-  const allCustomLinks = [...customLinks, ...dedicatedLinks];
-
   // Group contact lines: Name -> Address -> Email & Phone -> Each Link on its own line
   const lineAddress = [address].filter(Boolean);
   const lineEmailPhone = [email, phone].filter(Boolean);
   const allLinks = [
     linkedin,
     github,
-    portfolio,
-    ...allCustomLinks.map(l => (l.heading && l.url ? `${l.heading}: ${l.url}` : l.url))
+    portfolio
   ].filter(Boolean);
 
   const contactLines = [
@@ -195,20 +191,40 @@ const ClassicATSTemplate = ({ data = {} }) => {
             Education
           </h2>
           <div className="space-y-2">
-            {data.education.map((edu, idx) => {
+            {sanitizeEducationList(data.education).map((edu, idx) => {
               if (!edu.institution && !edu.degree) return null;
-              const years = edu.startYear && edu.endYear ? `${edu.startYear} - ${edu.endYear}` : edu.duration;
+
+              const cleanVal = (val) => {
+                if (!val) return '';
+                const s = String(val).trim();
+                return (s.toLowerCase() === 'null' || s.toLowerCase() === 'n/a') ? '' : s;
+              };
+
+              const startY = cleanVal(edu.startYear);
+              const endY = cleanVal(edu.endYear);
+              const dur = cleanVal(edu.duration);
+              const yearDisplay = endY 
+                ? (startY ? `${startY} - ${endY}` : endY)
+                : (startY || dur);
+
+              const gpaDisplay = cleanVal(edu.gpa);
+
+              const degreeStr = edu.degree || '';
+              const branchStr = edu.branch && !degreeStr.toLowerCase().includes(edu.branch.toLowerCase())
+                ? ` in ${edu.branch}`
+                : '';
+
               return (
-                <div key={idx} className="text-black">
+                <div key={idx} className="text-black mb-1">
                   <div className="flex justify-between items-baseline font-semibold">
                     <span>
-                      {edu.degree} {edu.branch && `in ${edu.branch}`}
-                      {edu.institution && <span className="font-normal"> — {edu.institution}</span>}
-                      {edu.location && <span className="font-normal text-[11px] text-gray-700"> ({edu.location})</span>}
+                      {degreeStr}{branchStr}
+                      {edu.institution && <span className="font-normal">, {edu.institution}</span>}
+                      {edu.location && <span className="font-normal text-[11px] text-gray-700">, {edu.location}</span>}
                     </span>
-                    {years && <span className="text-[11px] font-normal">{years}</span>}
+                    {yearDisplay && <span className="text-[11px] font-normal flex-shrink-0 ml-4">— {yearDisplay}</span>}
                   </div>
-                  {edu.gpa && <div className="text-[11px] text-gray-800">CGPA/Score: {edu.gpa}</div>}
+                  {gpaDisplay && <div className="text-[11px] text-gray-800">CGPA/Score: {gpaDisplay}</div>}
                   {Array.isArray(edu.relevantCoursework) && edu.relevantCoursework.length > 0 && (
                     <div className="text-[11px] text-gray-800">
                       <span className="font-semibold">Coursework: </span>

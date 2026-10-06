@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   FileText, 
   Trash2, 
@@ -11,15 +11,36 @@ import {
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import Loader from '../components/Loader';
+import { useAuth } from '../context/AuthContext';
+import { fetchUserResumesFromSupabase, deleteUserResumeFromSupabase } from '../services/supabaseResumeService';
 
 const History = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [resumes, setResumes] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchHistory = async () => {
     try {
-      const { data } = await api.get('/resume/history');
-      setResumes(data);
+      let mongoHistory = [];
+      try {
+        const { data } = await api.get('/resume/history');
+        mongoHistory = data || [];
+      } catch (err) {
+        console.warn('MongoDB history error:', err.message);
+      }
+
+      let supabaseHistory = [];
+      if (user) {
+        supabaseHistory = await fetchUserResumesFromSupabase(user);
+      }
+
+      const combined = [...supabaseHistory, ...mongoHistory].sort((a, b) => 
+        new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at)
+      );
+
+      const unique = Array.from(new Map(combined.map(item => [item._id || item.filename, item])).values());
+      setResumes(unique);
     } catch (error) {
       console.error(error);
       toast.error('Failed to load scan catalog.');
@@ -32,13 +53,17 @@ const History = () => {
     fetchHistory();
   }, []);
 
-  const handleDelete = async (id, e) => {
-    e.preventDefault(); // Stop click propagation to link wrapper
-    if (!window.confirm('Delete this resume and all its version history permanently?')) return;
+  const handleDelete = async (item, e) => {
+    e.preventDefault();
+    if (!window.confirm('Delete this resume permanently?')) return;
 
     try {
-      await api.delete(`/resume/${id}`);
-      setResumes(resumes.filter(item => item._id !== id));
+      if (item.isSupabase) {
+        await deleteUserResumeFromSupabase(item._id, item.file_path, user);
+      } else {
+        await api.delete(`/resume/${item._id}`);
+      }
+      setResumes(resumes.filter(r => r._id !== item._id));
       toast.success('Resume deleted.');
     } catch (error) {
       console.error(error);
@@ -99,11 +124,23 @@ const History = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {resumes.map((item) => (
-            <Link
+            <div
               key={item._id}
-              to={`/analysis/${item._id}`}
+              className="glass-panel glass-panel-hover p-6 rounded-2xl border border-slate-800 flex flex-col justify-between group h-64 cursor-pointer"
+              onClick={() => {
+                if (item.isSupabase) {
+                  if (item.extracted_data) {
+                    localStorage.setItem('resumeroast_pending_import', JSON.stringify({
+                      ...item.extracted_data,
+                      filename: item.filename
+                    }));
+                  }
+                  navigate('/builder');
+                } else {
+                  navigate(`/analysis/${item._id}`);
+                }
+              }}
               title={item.originalFile?.filename || 'Resume'}
-              className="glass-panel glass-panel-hover p-6 rounded-2xl border border-slate-800 flex flex-col justify-between group h-64"
             >
               <div className="space-y-4">
                 {/* Top: title and score badge */}
@@ -138,7 +175,7 @@ const History = () => {
                     <span>•</span>
                     <div className="flex items-center space-x-1">
                       <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                      <span>{new Date(item.createdAt || item.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
                 </div>
@@ -146,22 +183,42 @@ const History = () => {
 
               {/* Bottom: Action Buttons */}
               <div className="flex items-center justify-between border-t border-slate-850 pt-4 mt-6">
-                <button
-                  onClick={(e) => handleDownload(item._id, item.jobRole, e)}
-                  className="flex items-center space-x-1.5 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
-                  title="Quick Download"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Download</span>
-                </button>
+                {item.isSupabase && item.file_url ? (
+                  <a
+                    href={item.file_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center space-x-1.5 text-xs font-semibold text-brandPurple hover:underline transition-colors"
+                    title="View PDF"
+                  >
+                    <ArrowUpRight className="w-4 h-4" />
+                    <span>View PDF</span>
+                  </a>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDownload(item._id, item.jobRole, e);
+                    }}
+                    className="flex items-center space-x-1.5 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                    title="Quick Download"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download</span>
+                  </button>
+                )}
 
                 <div className="flex items-center space-x-3">
                   <span className="flex items-center text-xs font-bold text-brandPurple group-hover:underline">
-                    <span>View Scan</span>
+                    <span>{item.isSupabase ? 'Edit in Builder' : 'View Scan'}</span>
                     <ArrowUpRight className="w-4 h-4 ml-0.5" />
                   </span>
                   <button
-                    onClick={(e) => handleDelete(item._id, e)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(item, e);
+                    }}
                     className="p-1.5 text-slate-500 hover:text-rose-500 transition-colors"
                     title="Delete Scan"
                   >
@@ -169,7 +226,7 @@ const History = () => {
                   </button>
                 </div>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       )}
