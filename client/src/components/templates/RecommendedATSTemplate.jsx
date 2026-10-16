@@ -1,15 +1,14 @@
 import React from 'react';
 import { sanitizeEducationList } from '../../utils/educationSanitizer';
+import { getCleanContactLinks } from '../../utils/linkSanitizer';
 
 const RecommendedATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
   const fullName = contact.fullName || 'Alok Kumar';
   const email = contact.email || '';
   const phone = contact.phone || '';
-  const linkedin = contact.linkedin || '';
-  const github = contact.github || '';
-  const portfolio = contact.portfolio || '';
   const address = contact.address || '';
+  const cleanLinks = getCleanContactLinks(contact);
 
   // Address and Contact String
   const contactDetails = [address, phone, email].filter(Boolean).join(', ');
@@ -19,12 +18,8 @@ const RecommendedATSTemplate = ({ data = {} }) => {
   const photoSize = contact.photoSize || 76;
   const photoHeight = Math.round(photoSize * 1.333);
 
-  // Technical Skills (Left Column)
-  const rawSkills = Array.isArray(data.skills) 
-    ? data.skills.map(s => typeof s === 'object' && s !== null ? s.name : s).filter(Boolean) 
-    : [];
-  const rawTech = Array.isArray(data.technicalSkills) ? data.technicalSkills.filter(Boolean) : [];
-  const techSkills = Array.from(new Set([...rawTech, ...rawSkills]));
+  // Technical Skills (Left Column) - excludes General Skills (Star Rated) which is shown only in Modern ATS
+  const techSkills = Array.isArray(data.technicalSkills) ? data.technicalSkills.filter(Boolean) : [];
 
   // Professional / Soft Skills (Right Column)
   const softSkills = Array.isArray(data.softSkills) ? data.softSkills.filter(Boolean) : [];
@@ -74,50 +69,21 @@ const RecommendedATSTemplate = ({ data = {} }) => {
             </div>
           )}
 
-          {/* LinkedIn Link */}
-          {linkedin && (
-            <div className="text-[11.5px] text-[#a16207] font-medium">
-              <span>LinkedIn: </span>
+          {/* Clean User Links */}
+          {cleanLinks.map((link, idx) => (
+            <div key={idx} className="text-[11.5px] text-[#a16207] font-medium">
+              <span>{link.heading || 'Link'}: </span>
               <a 
-                href={linkedin.startsWith('http') ? linkedin : `https://${linkedin}`} 
+                href={link.url.startsWith('http') ? link.url : `https://${link.url}`} 
                 target="_blank" 
                 rel="noreferrer"
                 className="underline text-[#a16207] hover:opacity-80"
               >
-                {linkedin.startsWith('http') ? linkedin : `https://${linkedin}`}
+                {link.url}
               </a>
             </div>
-          )}
-
-          {/* GitHub Link */}
-          {github && (
-            <div className="text-[11.5px] text-[#a16207] font-medium">
-              <span>GitHub: </span>
-              <a 
-                href={github.startsWith('http') ? github : `https://${github}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="underline text-[#a16207] hover:opacity-80"
-              >
-                {github.startsWith('http') ? github : `http://${github}`}
-              </a>
-            </div>
-          )}
-
-          {/* Portfolio Link */}
-          {portfolio && (
-            <div className="text-[11.5px] text-[#a16207] font-medium">
-              <span>Portfolio: </span>
-              <a 
-                href={portfolio.startsWith('http') ? portfolio : `https://${portfolio}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="underline text-[#a16207] hover:opacity-80"
-              >
-                {portfolio}
-              </a>
-            </div>
-          )}        </div>
+          ))}
+        </div>
       </div>
 
       {/* SUMMARY (If present) */}

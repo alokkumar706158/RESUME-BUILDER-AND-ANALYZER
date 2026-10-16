@@ -1,5 +1,6 @@
 import React from 'react';
 import { sanitizeEducationList } from '../../utils/educationSanitizer';
+import { getCleanContactLinks } from '../../utils/linkSanitizer';
 
 const StarRating = ({ rating = 5 }) => {
   const stars = [];
@@ -19,14 +20,8 @@ const ModernATSTemplate = ({ data = {} }) => {
   const fullName = contact.fullName || 'ALOK KUMAR';
   const email = contact.email || '';
   const phone = contact.phone || '';
-  const linkedin = contact.linkedin || '';
-  const github = contact.github || '';
-  const portfolio = contact.portfolio || '';
   const address = contact.address || '';
-
-  const customLinks = Array.isArray(contact.customLinks) ? contact.customLinks.filter(l => l.heading && l.url) : [];
-  const dedicatedLinks = Array.isArray(data.links) ? data.links.filter(l => l.heading && l.url) : [];
-  const allCustomLinks = [...customLinks, ...dedicatedLinks];
+  const cleanLinks = getCleanContactLinks(contact);
 
   // Skills processing with star ratings (NO percentage bars)
   const skillsList = Array.isArray(data.skills)
@@ -76,9 +71,14 @@ const ModernATSTemplate = ({ data = {} }) => {
                 {phone && <div className="truncate">📞 {phone}</div>}
               </div>
             )}
-            {linkedin && <div className="truncate font-medium text-slate-200">🔗 {linkedin}</div>}
-            {github && <div className="truncate">💻 {github}</div>}
-            {portfolio && <div className="truncate">🌐 {portfolio}</div>}
+            {cleanLinks.map((link, idx) => (
+              <div key={idx} className="truncate text-slate-200">
+                {link.heading?.toLowerCase().includes('github') ? '💻 ' :
+                 link.heading?.toLowerCase().includes('portfolio') || link.heading?.toLowerCase().includes('website') ? '🌐 ' : '🔗 '}
+                <span className="font-semibold">{link.heading ? `${link.heading}: ` : ''}</span>
+                <span>{link.url}</span>
+              </div>
+            ))}
           </div>
 
           {/* SKILLS WITH STAR RATINGS (★★★★★) - NO PERCENTAGE BARS */}

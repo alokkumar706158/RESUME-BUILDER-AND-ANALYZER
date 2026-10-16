@@ -8,11 +8,12 @@ import {
   BorderStyle 
 } from 'docx';
 
-export const generateResumeDOCX = async (resumeData, user) => {
+export const generateResumeDOCX = async (resumeData, user, template = 'classic') => {
   const contact = resumeData.contactInfo || {};
   const fullName = contact.fullName || user?.name || 'ALOK KUMAR';
   const email = contact.email || user?.email || '';
   const phone = contact.phone || '';
+  const address = contact.address || '';
   const linkedin = contact.linkedin || '';
   const github = contact.github || '';
   const portfolio = contact.portfolio || '';
@@ -134,24 +135,75 @@ export const generateResumeDOCX = async (resumeData, user) => {
   }
 
   // Skills
-  const skillsList = Array.isArray(resumeData.skills)
-    ? resumeData.skills.map(s => typeof s === 'object' ? s.name : s).filter(Boolean)
+  const normalizedTemplate = (template || 'classic').toLowerCase();
+  const isModern = normalizedTemplate.includes('modern');
+
+  const techSkills = Array.isArray(resumeData.technicalSkills) ? resumeData.technicalSkills.filter(Boolean) : [];
+  const toolsTech = Array.isArray(resumeData.toolsAndTech) ? resumeData.toolsAndTech.filter(Boolean) : [];
+  const softSkills = Array.isArray(resumeData.softSkills) ? resumeData.softSkills.filter(Boolean) : [];
+
+  const generalSkills = Array.isArray(resumeData.skills)
+    ? resumeData.skills.map(s => {
+        if (typeof s === 'object' && s !== null) {
+          const r = Math.max(1, Math.min(5, Number(s.rating) || 5));
+          return `${s.name || ''} (${'★'.repeat(r)}${'☆'.repeat(5 - r)})`;
+        }
+        return String(s || '');
+      }).filter(Boolean)
     : [];
 
-  if (skillsList.length > 0) {
-    addHeading('Technical Skills');
-    children.push(
-      new Paragraph({
-        spaceAfter: 200,
-        children: [
-          new TextRun({
-            text: skillsList.join(', '),
-            size: 20,
-            font: 'Calibri'
-          })
-        ]
-      })
-    );
+  const docxSkillsLines = [];
+
+  // Show General Skills (Star Rated) ONLY in Modern ATS
+  if (isModern && generalSkills.length > 0) {
+    docxSkillsLines.push({
+      label: 'Skills (Star Rated)',
+      content: generalSkills.join('  •  ')
+    });
+  }
+
+  // Technical & Soft Skills sections (shown across templates without deleting user data)
+  if (techSkills.length > 0) {
+    docxSkillsLines.push({
+      label: 'Technical Skills',
+      content: techSkills.join(', ')
+    });
+  }
+  if (toolsTech.length > 0) {
+    docxSkillsLines.push({
+      label: 'Tools & Technologies',
+      content: toolsTech.join(', ')
+    });
+  }
+  if (softSkills.length > 0) {
+    docxSkillsLines.push({
+      label: 'Soft Skills',
+      content: softSkills.join(', ')
+    });
+  }
+
+  if (docxSkillsLines.length > 0) {
+    addHeading('Skills & Competencies');
+    docxSkillsLines.forEach(item => {
+      children.push(
+        new Paragraph({
+          spaceAfter: 80,
+          children: [
+            new TextRun({
+              text: `${item.label}: `,
+              bold: true,
+              size: 20,
+              font: 'Calibri'
+            }),
+            new TextRun({
+              text: item.content,
+              size: 20,
+              font: 'Calibri'
+            })
+          ]
+        })
+      );
+    });
   }
 
   // Experience

@@ -399,7 +399,168 @@ ${JSON.stringify(currentResumeData, null, 2)}
   }
 };
 
-export const executeSectionAIAction = async (sectionName, actionType, content, jobRole = '') => {
+const buildGroundedSummary = (jobRole = 'Software Engineer', context = {}, fallbackContent = '') => {
+  const role = jobRole || 'Software Professional';
+  const safeCtx = (context && typeof context === 'object') ? context : {};
+
+  // 1. Technical Skills
+  const rawSkills = Array.isArray(safeCtx.skills)
+    ? safeCtx.skills.map(s => (typeof s === 'string' ? s : s?.name)).filter(Boolean)
+    : (Array.isArray(safeCtx.technicalSkills) ? safeCtx.technicalSkills : []);
+  const topSkills = rawSkills.slice(0, 4).join(', ');
+
+  // 2. Experience Highlights
+  const expList = Array.isArray(safeCtx.experience) ? safeCtx.experience : [];
+  const primaryExp = expList.find(e => e && typeof e === 'object' && e.role && e.company) || expList[0];
+
+  // 3. Project Highlights
+  const projList = Array.isArray(safeCtx.projects) ? safeCtx.projects : [];
+  const primaryProj = projList.find(p => p && typeof p === 'object' && p.title) || projList[0];
+
+  // 4. Certifications & Education
+  const certList = Array.isArray(safeCtx.certifications) ? safeCtx.certifications : [];
+  const primaryCert = certList[0]?.name || (typeof certList[0] === 'string' ? certList[0] : '');
+
+  // 5. Achievements
+  const achList = Array.isArray(safeCtx.achievements) ? safeCtx.achievements : [];
+  const primaryAch = achList[0]?.title || (typeof achList[0] === 'string' ? achList[0] : '');
+
+  // Sentence 1: Professional identity & core technical competence
+  const certClause = primaryCert ? `, ${primaryCert},` : '';
+  let opening = '';
+  if (topSkills) {
+    opening = `${role}${certClause} with specialized technical expertise in ${topSkills}.`;
+  } else {
+    opening = `Results-oriented ${role}${certClause} with a solid foundation in modern software engineering principles and scalable system design.`;
+  }
+
+  // Sentence 2: Demonstrated real-world experience & engineering contributions
+  let expClause = '';
+  if (primaryExp && typeof primaryExp === 'object' && primaryExp.role && primaryExp.company) {
+    const rawBullets = Array.isArray(primaryExp.description) ? primaryExp.description.join(' ') : (primaryExp.description || '');
+    const cleanImpact = (primaryExp.achievements || rawBullets.split('.')[0] || 'delivering high-performance backend systems and reliable architectures')
+      .replace(/^Impact:\s*/i, '')
+      .trim();
+    const verbPhrase = cleanImpact.toLowerCase().startsWith('deliver') || cleanImpact.toLowerCase().startsWith('engineer') || cleanImpact.toLowerCase().startsWith('build') || cleanImpact.toLowerCase().startsWith('develop')
+      ? cleanImpact.charAt(0).toLowerCase() + cleanImpact.slice(1)
+      : 'delivering ' + cleanImpact;
+    expClause = `Demonstrated track record as a ${primaryExp.role} at ${primaryExp.company}, ${verbPhrase}.`;
+  } else if (primaryProj && typeof primaryProj === 'object' && primaryProj.title) {
+    const projTech = Array.isArray(primaryProj.techStack) ? primaryProj.techStack.slice(0, 3).join(', ') : (primaryProj.techStack || '');
+    expClause = `Hands-on experience architecting full-lifecycle applications such as ${primaryProj.title}${projTech ? ' utilizing ' + projTech : ''}, prioritizing performance and maintainability.`;
+  } else {
+    expClause = `Passionate about developing scalable, high-throughput architectures and writing clean, maintainable, and well-tested code.`;
+  }
+
+  // Sentence 3: Achievements, problem-solving, and role-readiness
+  let closing = '';
+  if (primaryAch) {
+    closing = `Recognized for ${primaryAch.replace(/^(Secured|Achieved)\s+/i, '').trim()}, bringing rigorous analytical problem-solving and immediate value to cross-functional engineering teams.`;
+  } else {
+    closing = `Dedicated to applying industry-standard engineering practices to optimize throughput, ensure ATS compliance, and deliver measurable business outcomes.`;
+  }
+
+  // Combine into a natural, cohesive 2-4 line narrative (strictly grounded, never repetitive)
+  const fullSummary = `${opening} ${expClause} ${closing}`.replace(/\s+/g, ' ').trim();
+  return fullSummary || (fallbackContent && typeof fallbackContent === 'string' && fallbackContent.trim()) || 'Results-driven professional with proven technical capabilities and engineering leadership.';
+};
+
+export const executeSectionAIAction = async (sectionName, actionType, content, jobRole = '', context = {}) => {
+  try {
+    const safeContext = (context && typeof context === 'object') ? context : {};
+
+    // Specialized processing for Professional Summary
+    if (sectionName === 'summary') {
+      const targetRole = jobRole || safeContext.jobRole || 'Software Engineer';
+
+      // Factual profile synthesis from candidate data
+      const skillsList = Array.isArray(safeContext.skills)
+        ? safeContext.skills.map(s => (typeof s === 'string' ? s : s?.name)).filter(Boolean).slice(0, 15).join(', ')
+        : (Array.isArray(safeContext.technicalSkills) ? safeContext.technicalSkills.join(', ') : (typeof safeContext.skills === 'string' ? safeContext.skills : ''));
+
+      const expSummary = Array.isArray(safeContext.experience) && safeContext.experience.length > 0
+        ? safeContext.experience.slice(0, 3).map(e => {
+            if (!e) return '';
+            const bullets = Array.isArray(e.description) ? e.description.slice(0, 2).join(' ') : (e.description || '');
+            const ach = e.achievements ? `Impact: ${e.achievements}` : '';
+            return `- ${e.role || ''} at ${e.company || ''} (${e.duration || e.startDate || ''}): ${bullets} ${ach}`.trim();
+          }).filter(Boolean).join('\n')
+        : 'None listed';
+
+      const projSummary = Array.isArray(safeContext.projects) && safeContext.projects.length > 0
+        ? safeContext.projects.slice(0, 3).map(p => {
+            if (!p) return '';
+            const tech = Array.isArray(p.techStack) ? p.techStack.join(', ') : (p.techStack || '');
+            const desc = Array.isArray(p.description) ? p.description.slice(0, 2).join(' ') : (p.description || '');
+            return `- ${p.title || ''}${tech ? ' (Tech: ' + tech + ')' : ''}: ${desc}`.trim();
+          }).filter(Boolean).join('\n')
+        : 'None listed';
+
+      const eduSummary = Array.isArray(safeContext.education) && safeContext.education.length > 0
+        ? safeContext.education.map(ed => ed ? `${ed.degree || ''} ${ed.branch ? 'in ' + ed.branch : ''} from ${ed.institution || ''}${ed.gpa ? ' (GPA: ' + ed.gpa + ')' : ''}` : '').filter(Boolean).join('; ')
+        : 'None listed';
+
+      const certSummary = Array.isArray(safeContext.certifications) && safeContext.certifications.length > 0
+        ? safeContext.certifications.map(c => (typeof c === 'string' ? c : `${c?.name || ''} (${c?.organization || ''})`)).filter(Boolean).join(', ')
+        : 'None';
+
+      const achSummary = Array.isArray(safeContext.achievements) && safeContext.achievements.length > 0
+        ? safeContext.achievements.map(a => (typeof a === 'string' ? a : `${a?.title || ''}${a?.description ? ': ' + a.description : ''}`)).filter(Boolean).join('; ')
+        : 'None';
+
+      const jdContext = (safeContext.jobDescription || '').trim();
+      const currentSummary = typeof content === 'string' ? content.trim() : '';
+
+      const summaryPrompt = `
+You are an expert Senior Technical Recruiter and ATS Optimization Specialist.
+
+TARGET JOB ROLE: "${targetRole}"
+${jdContext ? `TARGET JOB DESCRIPTION (JD):\n"""\n${jdContext}\n"""\n` : ''}
+
+CANDIDATE ACTUAL FACTUAL PROFILE:
+- Skills: ${skillsList || 'Not specified'}
+- Experience Highlights:
+${expSummary}
+- Key Projects:
+${projSummary}
+- Education: ${eduSummary}
+- Certifications: ${certSummary}
+- Notable Achievements: ${achSummary}
+${currentSummary ? `\nCurrent Draft Summary:\n"${currentSummary}"\n` : ''}
+
+TASK:
+Generate a concise, professional, ATS-friendly professional summary tailored for "${targetRole}".
+
+CRITICAL REQUIREMENTS:
+1. LENGTH: Exactly 2 to 4 lines (approx. 45 to 65 words). Single cohesive narrative paragraph.
+2. STRICT TRUTHFULNESS & GROUNDING: NEVER invent, hallucinate, or exaggerate skills, tools, companies, years of experience, or metrics not present in the candidate profile above. Only reference their real background.
+3. TAILORING: Tailor the narrative hook and keywords strictly to "${targetRole}"${jdContext ? ' and the provided Job Description' : ''}.
+4. NO LISTS OR REPETITION: Do NOT list skills mechanically or repeat the resume as an itemized list. Do not use bullet points. Craft an impactful narrative connecting strengths to demonstrated outcomes.
+5. NO GENERIC FILLER: Never use empty cliches like "hardworking team player looking for growth", "dynamic visionary", or generic buzzwords.
+6. FORMAT: Output ONLY valid JSON with a single key "updatedContent" containing the plain string text of the summary. No quotes, markdown headers, or bullet points.
+`;
+
+      try {
+        if (!genAI) {
+          return buildGroundedSummary(targetRole, safeContext, content);
+        }
+        const response = await genAI.models.generateContent({
+          model: 'gemini-1.5-flash',
+          contents: summaryPrompt,
+          config: { responseMimeType: 'application/json' }
+        });
+        const parsed = safeParseJson(response.text);
+        if (parsed.updatedContent && typeof parsed.updatedContent === 'string' && parsed.updatedContent.trim()) {
+          return parsed.updatedContent.trim().replace(/^["']|["']$/g, '');
+        }
+        return buildGroundedSummary(targetRole, safeContext, content);
+      } catch (err) {
+        console.warn('Gemini Summary Generation warning (falling back to grounded synthesis):', err.message);
+        return buildGroundedSummary(targetRole, safeContext, content);
+      }
+    }
+
+  // Standard Section AI Action
   const instructionsMap = {
     generate: `Generate high-quality, professional, ATS-optimized content for section "${sectionName}" tailored for target job role "${jobRole}". Include industry standard keywords, strong action verbs, and quantifiable metrics.`,
     fix: 'Fix all grammar, spelling, and punctuation errors, keeping the factual meaning intact.',
@@ -447,5 +608,12 @@ Return ONLY valid JSON with a single key "updatedContent".
     console.error('AI Section Action error:', err);
     return content;
   }
+} catch (outerErr) {
+  console.error('executeSectionAIAction critical error:', outerErr);
+  if (sectionName === 'summary') {
+    return buildGroundedSummary(jobRole, context, content);
+  }
+  return content;
+}
 };
 

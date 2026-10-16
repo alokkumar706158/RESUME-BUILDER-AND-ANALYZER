@@ -1,24 +1,19 @@
 import React from 'react';
 import { sanitizeEducationList } from '../../utils/educationSanitizer';
+import { getCleanContactLinks } from '../../utils/linkSanitizer';
 
 const ClassicATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
   const fullName = contact.fullName || 'ALOK KUMAR';
   const email = contact.email || '';
   const phone = contact.phone || '';
-  const linkedin = contact.linkedin || '';
-  const github = contact.github || '';
-  const portfolio = contact.portfolio || '';
   const address = contact.address || '';
 
   // Group contact lines: Name -> Address -> Email & Phone -> Each Link on its own line
   const lineAddress = [address].filter(Boolean);
   const lineEmailPhone = [email, phone].filter(Boolean);
-  const allLinks = [
-    linkedin,
-    github,
-    portfolio
-  ].filter(Boolean);
+  const cleanLinks = getCleanContactLinks(contact);
+  const allLinks = cleanLinks.map(l => l.url);
 
   const contactLines = [
     lineAddress,
@@ -26,17 +21,12 @@ const ClassicATSTemplate = ({ data = {} }) => {
     ...allLinks.map(link => [link])
   ].filter(line => line.length > 0);
 
-  // Normalize skills
-  const skillsList = Array.isArray(data.skills)
-    ? data.skills.map(s => (typeof s === 'object' ? s.name : s)).filter(Boolean)
-    : [];
-
+  // Normalize skills (General Skills / Star Rated is shown only in Modern ATS)
   const softSkills = Array.isArray(data.softSkills) ? data.softSkills.filter(Boolean) : [];
   const techSkills = Array.isArray(data.technicalSkills) ? data.technicalSkills.filter(Boolean) : [];
   const toolsTech = Array.isArray(data.toolsAndTech) ? data.toolsAndTech.filter(Boolean) : [];
 
   const combinedSkills = [
-    skillsList.length > 0 ? `Core Competencies: ${skillsList.join(', ')}` : null,
     techSkills.length > 0 ? `Technical Skills: ${techSkills.join(', ')}` : null,
     toolsTech.length > 0 ? `Tools & Technologies: ${toolsTech.join(', ')}` : null,
     softSkills.length > 0 ? `Soft Skills: ${softSkills.join(', ')}` : null

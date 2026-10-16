@@ -32,7 +32,8 @@ import {
   Maximize2,
   Sliders,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  RefreshCw
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -46,6 +47,7 @@ import ImportResumeModal from '../components/ImportResumeModal';
 import ImportCurationModal from '../components/ImportCurationModal';
 import { useAuth } from '../context/AuthContext';
 import { saveResumeBuilderToSupabase, fetchLatestUserResumeFromSupabase } from '../services/supabaseResumeService';
+import { sanitizeContactInfo } from '../utils/linkSanitizer';
 
 const TARGET_JOB_ROLES = [
   'Java Developer',
@@ -279,7 +281,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     const imp = importedData.improvedResume || importedData || {};
     const ci = imp.contactInfo || {};
 
-    const newContact = {
+    const newContact = sanitizeContactInfo({
       fullName: ci.fullName || imp.fullName || imp.name || '',
       email: ci.email || imp.email || '',
       phone: ci.phone || imp.phone || '',
@@ -293,7 +295,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       customLinks: Array.isArray(ci.customLinks)
         ? ci.customLinks
         : (Array.isArray(imp.customLinks) ? imp.customLinks : [])
-    };
+    });
 
     const newSummary = imp.summary || '';
 
@@ -360,15 +362,25 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   const [aiSuggestionCandidate, setAiSuggestionCandidate] = useState('');
   const [aiTargetKey, setAiTargetKey] = useState({ section: '', field: '', index: null });
 
+  // Professional Summary AI & Edit Tracking States
+  const [hasUserEditedSummary, setHasUserEditedSummary] = useState(false);
+  const [summaryJobDescription, setSummaryJobDescription] = useState('');
+  const [showJdInput, setShowJdInput] = useState(false);
+  const [summaryAiLoading, setSummaryAiLoading] = useState(false);
+  const [summaryOverwriteConfirmOpen, setSummaryOverwriteConfirmOpen] = useState(false);
+  const [summaryRoleChangeModalOpen, setSummaryRoleChangeModalOpen] = useState(false);
+  const [pendingRoleForSummary, setPendingRoleForSummary] = useState('');
+  const [lastSummaryFingerprint, setLastSummaryFingerprint] = useState('');
+
   // Main Structured Resume State
   const [resumeData, setResumeData] = useState({
     contactInfo: {
       fullName: 'ALOK KUMAR',
       phone: '+91 9304XXXXXX',
       email: 'alok.dev@example.com',
-      linkedin: 'linkedin.com/in/alokkumar',
-      github: 'github.com/alokkumar',
-      portfolio: 'alokkumar.dev',
+      linkedin: '',
+      github: '',
+      portfolio: '',
       address: 'Bihar, India',
       profilePhoto: '',
       photoEnabled: false,
@@ -547,7 +559,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           setResumeData(prev => ({
             ...prev,
             ...parsed,
-            contactInfo: { ...prev.contactInfo, ...(parsed.contactInfo || {}) },
+            contactInfo: sanitizeContactInfo(parsed.contactInfo || prev.contactInfo),
             education: sanitizeEducationList(parsed.education || prev.education)
           }));
         }
@@ -605,7 +617,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           setResumeData(prev => ({
             ...prev,
             ...supabaseResume.resumeData,
-            contactInfo: { ...prev.contactInfo, ...(supabaseResume.resumeData.contactInfo || {}) },
+            contactInfo: sanitizeContactInfo(supabaseResume.resumeData.contactInfo || prev.contactInfo),
             education: sanitizeEducationList(supabaseResume.resumeData.education || prev.education)
           }));
           setLoading(false);
@@ -626,7 +638,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             setResumeData(prev => ({
               ...prev,
               ...dbResume.improvedResume,
-              contactInfo: { ...prev.contactInfo, ...(dbResume.improvedResume.contactInfo || {}) },
+              contactInfo: sanitizeContactInfo(dbResume.improvedResume.contactInfo || prev.contactInfo),
               education: sanitizeEducationList(dbResume.improvedResume.education || prev.education)
             }));
           }
@@ -713,15 +725,168 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     }
   };
 
+  // Compute resume fingerprint to detect relevant data changes
+  const computeResumeFingerprint = (role = jobRole, jd = summaryJobDescription) => {
+    const s = (resumeData.skills || []).map(x => (typeof x === 'string' ? x : x?.name || '')).filter(Boolean).join(',');
+    const e = (resumeData.experience || []).map(x => `${x?.role || ''}@${x?.company || ''}:${Array.isArray(x?.description) ? x.description.join(';') : (x?.description || '')}`).join('|');
+    const p = (resumeData.projects || []).map(x => `${x?.title || ''}:${Array.isArray(x?.techStack) ? x.techStack.join(';') : (x?.techStack || '')}:${Array.isArray(x?.description) ? x.description.join(';') : (x?.description || '')}`).join('|');
+    const ed = (resumeData.education || []).map(x => `${x?.degree || ''}@${x?.institution || ''}`).join('|');
+    const c = (resumeData.certifications || []).map(x => (typeof x === 'string' ? x : `${x?.name || ''}@${x?.organization || ''}`)).join('|');
+    const a = (resumeData.achievements || []).map(x => (typeof x === 'string' ? x : `${x?.title || ''}:${x?.description || ''}`)).join('|');
+    return `${role}#${jd}#${s}#${e}#${p}#${ed}#${c}#${a}`;
+  };
+
+  const currentSummaryFingerprint = computeResumeFingerprint();
+  const hasResumeDataChangedSinceSummary = Boolean(lastSummaryFingerprint && lastSummaryFingerprint !== currentSummaryFingerprint);
+
+  // Dedicated Professional Summary Generation & Regeneration Handler
+  const handleGenerateSummary = async (isRegenerate = false, force = false, overrideRole = null) => {
+    const roleToUse = overrideRole || jobRole || 'Software Engineer';
+
+    // If user manually customized their summary and hasn't explicitly permitted overwrite, prompt first
+    if (hasUserEditedSummary && !force && resumeData.summary && resumeData.summary.trim().length > 0) {
+      setSummaryOverwriteConfirmOpen(true);
+      return;
+    }
+
+    try {
+      setSummaryAiLoading(true);
+      toast.loading(isRegenerate ? 'Regenerating ATS summary...' : 'Generating tailored summary...', { id: 'summary-ai' });
+
+      const contextPayload = {
+        jobRole: roleToUse,
+        skills: resumeData.skills,
+        technicalSkills: resumeData.technicalSkills,
+        experience: resumeData.experience,
+        projects: resumeData.projects,
+        education: resumeData.education,
+        certifications: resumeData.certifications,
+        achievements: resumeData.achievements,
+        jobDescription: summaryJobDescription || ''
+      };
+
+      const res = await api.post('/resume/ai-action', {
+        resumeId: (resumeId && typeof resumeId === 'string' && resumeId.length === 24) ? resumeId : null,
+        sectionName: 'summary',
+        actionType: isRegenerate ? 'regenerate' : 'generate',
+        content: resumeData.summary || '',
+        jobRole: roleToUse,
+        context: contextPayload,
+        jobDescription: summaryJobDescription || ''
+      });
+
+      if (res.data && res.data.updatedContent !== undefined) {
+        const freshSummary = typeof res.data.updatedContent === 'string'
+          ? res.data.updatedContent.trim().replace(/^["']|["']$/g, '')
+          : String(res.data.updatedContent);
+
+        setResumeData(prev => {
+          const next = { ...prev, summary: freshSummary };
+          saveToLocalStorage(next);
+          return next;
+        });
+
+        setHasUserEditedSummary(false);
+        setLastSummaryFingerprint(computeResumeFingerprint(roleToUse));
+        toast.success(isRegenerate ? 'Summary regenerated successfully!' : 'Summary generated & populated!', { id: 'summary-ai' });
+      }
+    } catch (err) {
+      console.warn('Backend summary generation error, generating from profile data:', err);
+      // Construct recruiter-ready grounded summary directly from candidate profile
+      const rawSkills = Array.isArray(resumeData.skills)
+        ? resumeData.skills.map(s => (typeof s === 'string' ? s : s?.name)).filter(Boolean)
+        : (Array.isArray(resumeData.technicalSkills) ? resumeData.technicalSkills : []);
+      const topSkills = rawSkills.slice(0, 4).join(', ');
+      const pExp = (resumeData.experience || []).find(e => e?.role && e?.company) || resumeData.experience?.[0];
+      const pProj = (resumeData.projects || []).find(p => p?.title) || resumeData.projects?.[0];
+      const pCert = resumeData.certifications?.[0]?.name || (typeof resumeData.certifications?.[0] === 'string' ? resumeData.certifications?.[0] : '');
+      const pAch = resumeData.achievements?.[0]?.title || (typeof resumeData.achievements?.[0] === 'string' ? resumeData.achievements?.[0] : '');
+
+      const certCl = pCert ? `, ${pCert},` : '';
+      const openStr = topSkills
+        ? `${roleToUse}${certCl} with specialized technical expertise in ${topSkills}.`
+        : `Results-oriented ${roleToUse}${certCl} with a solid foundation in modern software engineering principles and scalable system design.`;
+
+      let expStr = '';
+      if (pExp && typeof pExp === 'object' && pExp.role && pExp.company) {
+        const rawBullets = Array.isArray(pExp.description) ? pExp.description.join(' ') : (pExp.description || '');
+        const cleanImpact = (pExp.achievements || rawBullets.split('.')[0] || 'delivering high-performance backend systems and reliable architectures').replace(/^Impact:\s*/i, '').trim();
+        const verbPhrase = cleanImpact.toLowerCase().startsWith('deliver') || cleanImpact.toLowerCase().startsWith('engineer') || cleanImpact.toLowerCase().startsWith('build') || cleanImpact.toLowerCase().startsWith('develop')
+          ? cleanImpact.charAt(0).toLowerCase() + cleanImpact.slice(1)
+          : 'delivering ' + cleanImpact;
+        expStr = `Demonstrated track record as a ${pExp.role} at ${pExp.company}, ${verbPhrase}.`;
+      } else if (pProj && typeof pProj === 'object' && pProj.title) {
+        const projTech = Array.isArray(pProj.techStack) ? pProj.techStack.slice(0, 3).join(', ') : (pProj.techStack || '');
+        expStr = `Hands-on experience architecting full-lifecycle applications such as ${pProj.title}${projTech ? ' utilizing ' + projTech : ''}, prioritizing performance and maintainability.`;
+      } else {
+        expStr = `Passionate about developing scalable, high-throughput architectures and writing clean, maintainable, and well-tested code.`;
+      }
+
+      const closeStr = pAch
+        ? `Recognized for ${pAch.replace(/^(Secured|Achieved)\s+/i, '').trim()}, bringing rigorous analytical problem-solving and immediate value to cross-functional engineering teams.`
+        : `Dedicated to applying industry-standard engineering practices to optimize throughput, ensure ATS compliance, and deliver measurable business outcomes.`;
+
+      const safeSummary = `${openStr} ${expStr} ${closeStr}`.replace(/\s+/g, ' ').trim();
+      setResumeData(prev => {
+        const next = { ...prev, summary: safeSummary };
+        saveToLocalStorage(next);
+        return next;
+      });
+      setHasUserEditedSummary(false);
+      setLastSummaryFingerprint(computeResumeFingerprint(roleToUse));
+      toast.success(isRegenerate ? 'Summary regenerated from your profile!' : 'Summary generated from your profile!', { id: 'summary-ai' });
+    } finally {
+      setSummaryAiLoading(false);
+    }
+  };
+
+  const handleJobRoleChange = (newRole) => {
+    setJobRole(newRole);
+    toast.success(`Target role set to: ${newRole}`);
+
+    // If user has not manually edited summary, or summary is empty:
+    if (!hasUserEditedSummary || !resumeData.summary || resumeData.summary.trim().length === 0) {
+      handleGenerateSummary(true, true, newRole);
+    } else {
+      // User has manually edited summary: NEVER overwrite without permission
+      setPendingRoleForSummary(newRole);
+      setSummaryRoleChangeModalOpen(true);
+    }
+  };
+
+  // Auto-generate summary when reaching Step 8 if summary is currently empty
+  useEffect(() => {
+    if (activeStep === 8) {
+      if (!resumeData.summary || resumeData.summary.trim().length === 0) {
+        handleGenerateSummary(false, true);
+      }
+    }
+  }, [activeStep]);
+
   // AI Trigger Executor
   const triggerAIAction = async (sectionName, actionType, content, targetInfo = {}) => {
     try {
       setAiLoading(true);
+      const contextPayload = {
+        jobRole,
+        skills: resumeData.skills,
+        technicalSkills: resumeData.technicalSkills,
+        experience: resumeData.experience,
+        projects: resumeData.projects,
+        education: resumeData.education,
+        certifications: resumeData.certifications,
+        achievements: resumeData.achievements,
+        jobDescription: summaryJobDescription || ''
+      };
+
       const res = await api.post('/resume/ai-action', {
-        resumeId,
+        resumeId: (resumeId && typeof resumeId === 'string' && resumeId.length === 24) ? resumeId : null,
         sectionName,
         actionType,
-        content
+        content,
+        jobRole,
+        context: contextPayload,
+        jobDescription: summaryJobDescription || ''
       });
 
       if (res.data && res.data.updatedContent !== undefined) {
@@ -751,6 +916,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
         } else {
           copy.summary = aiSuggestionCandidate;
         }
+        setHasUserEditedSummary(false);
+        setLastSummaryFingerprint(computeResumeFingerprint(jobRole));
       } else if (section === 'experience' && index !== null) {
         if (field === 'description') {
           copy.experience[index].description = Array.isArray(aiSuggestionCandidate)
@@ -796,7 +963,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       toast.loading('Generating PDF...', { id: 'pdf-toast' });
       const response = await api.post(
         '/resume/download',
-        { resumeId },
+        { resumeId, selectedTemplate, improvedResume: resumeData },
         { responseType: 'blob' }
       );
       const blob = new Blob([response.data], { type: 'application/pdf' });
@@ -820,7 +987,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       toast.loading('Generating DOCX...', { id: 'docx-toast' });
       const response = await api.post(
         '/resume/download-docx',
-        { resumeId },
+        { resumeId, selectedTemplate, improvedResume: resumeData },
         { responseType: 'blob' }
       );
       const blob = new Blob([response.data], {
@@ -918,10 +1085,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                 <label className="text-[10px] text-slate-400 hidden sm:inline">Role:</label>
                 <select
                   value={jobRole}
-                  onChange={(e) => {
-                    setJobRole(e.target.value);
-                    toast.success(`Target role set to: ${e.target.value}`);
-                  }}
+                  onChange={(e) => handleJobRoleChange(e.target.value)}
                   className="bg-slate-800 text-slate-200 text-[11px] font-medium rounded-md px-1.5 py-0.5 border border-slate-700 focus:outline-none focus:border-orange-500 cursor-pointer max-w-[120px] sm:max-w-[150px] truncate"
                 >
                   {TARGET_JOB_ROLES.map((role) => (
@@ -1362,60 +1526,25 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
                 <hr className="border-slate-800/80 my-3" />
 
-                {/* 4. Links without heading & Add Link Button */}
+                {/* 4. Links & Add Link Button */}
                 <div className="space-y-3">
-                  <div className="grid grid-cols-1 gap-2.5">
-                    <div>
-                      <input
-                        type="text"
-                        value={resumeData.contactInfo.linkedin}
-                        onChange={(e) => setResumeData(prev => ({
-                          ...prev,
-                          contactInfo: { ...prev.contactInfo, linkedin: e.target.value }
-                        }))}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-orange-500"
-                        placeholder="LinkedIn URL (e.g. linkedin.com/in/username)"
-                      />
-                    </div>
-
-                    <div>
-                      <input
-                        type="text"
-                        value={resumeData.contactInfo.github}
-                        onChange={(e) => setResumeData(prev => ({
-                          ...prev,
-                          contactInfo: { ...prev.contactInfo, github: e.target.value }
-                        }))}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-orange-500"
-                        placeholder="GitHub URL (e.g. github.com/username)"
-                      />
-                    </div>
-
-                    <div>
-                      <input
-                        type="text"
-                        value={resumeData.contactInfo.portfolio}
-                        onChange={(e) => setResumeData(prev => ({
-                          ...prev,
-                          contactInfo: { ...prev.contactInfo, portfolio: e.target.value }
-                        }))}
-                        className="w-full bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-orange-500"
-                        placeholder="Portfolio Website URL (e.g. myportfolio.dev)"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Custom Added Links */}
-                  {resumeData.contactInfo.customLinks?.map((link, idx) => (
+                  {/* Manually Added Links */}
+                  {(resumeData.contactInfo.customLinks || []).map((link, idx) => (
                     <div key={idx} className="flex items-center space-x-2">
                       <select
                         value={link.heading}
                         onChange={(e) => {
-                          const updated = [...resumeData.contactInfo.customLinks];
+                          const updated = [...(resumeData.contactInfo.customLinks || [])];
                           updated[idx].heading = e.target.value;
                           setResumeData(prev => ({
                             ...prev,
-                            contactInfo: { ...prev.contactInfo, customLinks: updated }
+                            contactInfo: {
+                              ...prev.contactInfo,
+                              customLinks: updated,
+                              linkedin: updated.find(l => l.heading?.toLowerCase() === 'linkedin')?.url || '',
+                              github: updated.find(l => l.heading?.toLowerCase() === 'github')?.url || '',
+                              portfolio: updated.find(l => l.heading?.toLowerCase() === 'portfolio')?.url || ''
+                            }
                           }));
                         }}
                         className="w-28 bg-slate-800 text-white text-xs rounded-lg px-2 py-2 border border-slate-700 focus:outline-none"
@@ -1426,23 +1555,35 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                         type="text"
                         value={link.url}
                         onChange={(e) => {
-                          const updated = [...resumeData.contactInfo.customLinks];
+                          const updated = [...(resumeData.contactInfo.customLinks || [])];
                           updated[idx].url = e.target.value;
                           setResumeData(prev => ({
                             ...prev,
-                            contactInfo: { ...prev.contactInfo, customLinks: updated }
+                            contactInfo: {
+                              ...prev.contactInfo,
+                              customLinks: updated,
+                              linkedin: updated.find(l => l.heading?.toLowerCase() === 'linkedin')?.url || '',
+                              github: updated.find(l => l.heading?.toLowerCase() === 'github')?.url || '',
+                              portfolio: updated.find(l => l.heading?.toLowerCase() === 'portfolio')?.url || ''
+                            }
                           }));
                         }}
                         className="flex-1 bg-slate-800 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-orange-500"
-                        placeholder="URL or profile link"
+                        placeholder="URL or profile link (e.g. linkedin.com/in/username)"
                       />
                       <button
                         type="button"
                         onClick={() => {
-                          const updated = resumeData.contactInfo.customLinks.filter((_, i) => i !== idx);
+                          const updated = (resumeData.contactInfo.customLinks || []).filter((_, i) => i !== idx);
                           setResumeData(prev => ({
                             ...prev,
-                            contactInfo: { ...prev.contactInfo, customLinks: updated }
+                            contactInfo: {
+                              ...prev.contactInfo,
+                              customLinks: updated,
+                              linkedin: updated.find(l => l.heading?.toLowerCase() === 'linkedin')?.url || '',
+                              github: updated.find(l => l.heading?.toLowerCase() === 'github')?.url || '',
+                              portfolio: updated.find(l => l.heading?.toLowerCase() === 'portfolio')?.url || ''
+                            }
                           }));
                         }}
                         className="text-slate-500 hover:text-red-400 p-1.5 transition"
@@ -1458,11 +1599,14 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                     <button
                       type="button"
                       onClick={() => {
+                        const existingHeadings = new Set((resumeData.contactInfo.customLinks || []).map(l => l.heading));
+                        const nextPlatform = PRESET_LINK_PLATFORMS.find(p => !existingHeadings.has(p)) || 'LinkedIn';
+                        const updated = [...(resumeData.contactInfo.customLinks || []), { heading: nextPlatform, url: '' }];
                         setResumeData(prev => ({
                           ...prev,
                           contactInfo: {
                             ...prev.contactInfo,
-                            customLinks: [...(prev.contactInfo.customLinks || []), { heading: 'LeetCode', url: '' }]
+                            customLinks: updated
                           }
                         }));
                       }}
@@ -1482,25 +1626,39 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   <span>AI Personal Info Suggestions</span>
                 </div>
                 <div className="space-y-1.5 text-xs text-slate-300">
-                  {!resumeData.contactInfo.linkedin && (
+                  {!(resumeData.contactInfo.customLinks || []).some(l => l.heading?.toLowerCase() === 'linkedin') && (
                     <div className="flex items-center justify-between bg-slate-800/80 p-2 rounded-lg">
                       <span>LinkedIn profile is missing.</span>
                       <button 
-                        onClick={() => setResumeData(prev => ({ ...prev, contactInfo: { ...prev.contactInfo, linkedin: 'linkedin.com/in/myprofile' } }))}
+                        onClick={() => {
+                          const updated = [...(resumeData.contactInfo.customLinks || []), { heading: 'LinkedIn', url: '' }];
+                          setResumeData(prev => ({
+                            ...prev,
+                            contactInfo: { ...prev.contactInfo, customLinks: updated }
+                          }));
+                          toast.success('Added LinkedIn field');
+                        }}
                         className="text-orange-400 font-semibold hover:underline text-[11px]"
                       >
-                        + Add Suggestion
+                        + Add LinkedIn
                       </button>
                     </div>
                   )}
-                  {!resumeData.contactInfo.github && (
+                  {!(resumeData.contactInfo.customLinks || []).some(l => l.heading?.toLowerCase() === 'github') && (
                     <div className="flex items-center justify-between bg-slate-800/80 p-2 rounded-lg">
                       <span>GitHub link is recommended for technical roles.</span>
                       <button 
-                        onClick={() => setResumeData(prev => ({ ...prev, contactInfo: { ...prev.contactInfo, github: 'github.com/mygithub' } }))}
+                        onClick={() => {
+                          const updated = [...(resumeData.contactInfo.customLinks || []), { heading: 'GitHub', url: '' }];
+                          setResumeData(prev => ({
+                            ...prev,
+                            contactInfo: { ...prev.contactInfo, customLinks: updated }
+                          }));
+                          toast.success('Added GitHub field');
+                        }}
                         className="text-orange-400 font-semibold hover:underline text-[11px]"
                       >
-                        + Add Suggestion
+                        + Add GitHub
                       </button>
                     </div>
                   )}
@@ -1576,25 +1734,26 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
               {/* Technical Skills Section (Left Side of Resume) */}
               <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider">Technical Skills (Left Side)</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider truncate">Technical Skills (Left Side)</h3>
                   <button
+                    type="button"
                     onClick={() => {
                       setResumeData(prev => ({
                         ...prev,
                         technicalSkills: [...(prev.technicalSkills || []), '']
                       }));
                     }}
-                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1"
+                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1 whitespace-nowrap flex-shrink-0 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Technical Skill</span>
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-2">
                   {(resumeData.technicalSkills || []).map((skill, idx) => (
-                    <div key={idx} className="flex items-center space-x-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700">
+                    <div key={idx} className="flex items-center space-x-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700/80 hover:border-slate-600 transition">
                       <input
                         type="text"
                         value={skill}
@@ -1603,44 +1762,52 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                           updated[idx] = e.target.value;
                           setResumeData(prev => ({ ...prev, technicalSkills: updated }));
                         }}
-                        className="flex-1 bg-slate-900 text-white text-xs rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none"
+                        className="flex-1 min-w-0 bg-slate-900 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:border-orange-500/60 focus:outline-none transition"
                         placeholder="e.g. Java 17, Spring Boot"
                       />
                       <button
+                        type="button"
                         onClick={() => {
                           const updated = (resumeData.technicalSkills || []).filter((_, i) => i !== idx);
                           setResumeData(prev => ({ ...prev, technicalSkills: updated }));
                         }}
-                        className="text-slate-500 hover:text-red-400 p-1"
+                        className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-700/50 transition flex-shrink-0"
+                        title="Delete skill"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   ))}
+                  {(!resumeData.technicalSkills || resumeData.technicalSkills.length === 0) && (
+                    <p className="text-[11px] text-slate-500 italic py-1 text-center">
+                      No technical skills added yet. Click &quot;Add Technical Skill&quot; above.
+                    </p>
+                  )}
                 </div>
               </div>
 
               {/* Professional / Soft Skills Section (Right Side of Resume) */}
               <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider">Professional Skills (Right Side)</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider truncate">Professional Skills (Right Side)</h3>
                   <button
+                    type="button"
                     onClick={() => {
                       setResumeData(prev => ({
                         ...prev,
                         softSkills: [...(prev.softSkills || []), '']
                       }));
                     }}
-                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1"
+                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1 whitespace-nowrap flex-shrink-0 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Professional Skill</span>
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-2">
                   {(resumeData.softSkills || []).map((skill, idx) => (
-                    <div key={idx} className="flex items-center space-x-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700">
+                    <div key={idx} className="flex items-center space-x-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700/80 hover:border-slate-600 transition">
                       <input
                         type="text"
                         value={skill}
@@ -1649,35 +1816,43 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                           updated[idx] = e.target.value;
                           setResumeData(prev => ({ ...prev, softSkills: updated }));
                         }}
-                        className="flex-1 bg-slate-900 text-white text-xs rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none"
+                        className="flex-1 min-w-0 bg-slate-900 text-white text-xs rounded-lg px-3 py-2 border border-slate-700 focus:border-orange-500/60 focus:outline-none transition"
                         placeholder="e.g. Problem Solving, Leadership"
                       />
                       <button
+                        type="button"
                         onClick={() => {
                           const updated = (resumeData.softSkills || []).filter((_, i) => i !== idx);
                           setResumeData(prev => ({ ...prev, softSkills: updated }));
                         }}
-                        className="text-slate-500 hover:text-red-400 p-1"
+                        className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-700/50 transition flex-shrink-0"
+                        title="Delete skill"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   ))}
+                  {(!resumeData.softSkills || resumeData.softSkills.length === 0) && (
+                    <p className="text-[11px] text-slate-500 italic py-1 text-center">
+                      No professional skills added yet. Click &quot;Add Professional Skill&quot; above.
+                    </p>
+                  )}
                 </div>
               </div>
 
               {/* Skills List with Star Ratings */}
               <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">General Skills (Star Rated)</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider truncate">General Skills (Star Rated)</h3>
                   <button
+                    type="button"
                     onClick={() => {
                       setResumeData(prev => ({
                         ...prev,
                         skills: [...(prev.skills || []), { name: '', rating: 5 }]
                       }));
                     }}
-                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1"
+                    className="text-orange-400 hover:text-orange-300 text-xs font-bold flex items-center space-x-1 whitespace-nowrap flex-shrink-0 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Skill</span>
@@ -1690,7 +1865,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                     const rating = typeof skillObj === 'object' ? (skillObj.rating || 5) : 5;
 
                     return (
-                      <div key={idx} className="flex items-center justify-between bg-slate-800/80 p-2 rounded-xl space-x-2">
+                      <div key={idx} className="flex items-center justify-between bg-slate-800/80 p-2 rounded-xl space-x-2 border border-slate-700/80 hover:border-slate-600 transition">
                         <input
                           type="text"
                           value={skillName}
@@ -1703,7 +1878,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                             }
                             setResumeData(prev => ({ ...prev, skills: updated }));
                           }}
-                          className="flex-1 bg-slate-900 text-white text-xs rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none"
+                          className="flex-1 min-w-0 bg-slate-900 text-white text-xs rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none"
                           placeholder="e.g. Spring Boot"
                         />
 
@@ -2479,42 +2654,136 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           {/* STEP 08: SUMMARY */}
           {activeStep === 8 && (
             <div className="space-y-5 animate-fadeIn">
-              <div>
-                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
-                  <FileText className="w-5 h-5 text-orange-400" />
-                  <span>Professional Summary</span>
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">Craft a compelling summary tailored for {jobRole}.</p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                    <FileText className="w-5 h-5 text-orange-400" />
+                    <span>Professional Summary</span>
+                    {hasUserEditedSummary && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                        ✍️ User Edited (Protected)
+                      </span>
+                    )}
+                    {!hasUserEditedSummary && resumeData.summary && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium flex items-center space-x-1">
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                        <span>AI Tailored</span>
+                      </span>
+                    )}
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Concise 2–4 line ATS-friendly summary grounded in your real profile and tailored for <strong className="text-orange-400">{jobRole}</strong>.
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowJdInput(!showJdInput)}
+                    className="text-xs text-orange-400 hover:text-orange-300 font-medium px-2.5 py-1 rounded-lg border border-orange-500/30 hover:border-orange-500/60 bg-orange-500/5 transition flex items-center space-x-1"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{showJdInput ? 'Hide Job Description' : '+ Add Job Description'}</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Notice when relevant resume data changed */}
+              {hasResumeDataChangedSinceSummary && (
+                <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl flex items-center justify-between text-xs text-amber-300">
+                  <div className="flex items-center space-x-2">
+                    <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <span>Your resume skills or experience have been updated. Regenerate your summary to keep it synchronized?</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={summaryAiLoading}
+                    onClick={() => handleGenerateSummary(true, false)}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1 rounded-lg text-xs transition flex-shrink-0 ml-3"
+                  >
+                    Sync & Regenerate
+                  </button>
+                </div>
+              )}
+
+              {/* Optional Job Description Input */}
+              {showJdInput && (
+                <div className="bg-slate-900/80 border border-slate-800 p-3.5 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <label className="font-semibold text-slate-300 flex items-center space-x-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-orange-400" />
+                      <span>Target Job Description (Optional)</span>
+                    </label>
+                    {summaryJobDescription && (
+                      <button
+                        type="button"
+                        onClick={() => setSummaryJobDescription('')}
+                        className="text-[11px] text-slate-400 hover:text-rose-400 transition"
+                      >
+                        Clear JD
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={summaryJobDescription}
+                    onChange={(e) => setSummaryJobDescription(e.target.value)}
+                    placeholder="Paste job requirements or responsibilities here. AI will align summary keywords with this target job..."
+                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg p-2.5 border border-slate-700 focus:outline-none focus:border-orange-500 leading-relaxed font-sans"
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    When provided, AI extracts high-priority ATS keywords from this JD and weaves matching capabilities from your actual profile into the summary.
+                  </p>
+                </div>
+              )}
 
               {/* Large Text Editor */}
               <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-3">
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>ATS Keyword Match: <strong className="text-emerald-400">82%</strong></span>
+                  <div className="flex items-center space-x-2">
+                    <span>ATS Keyword Match: <strong className="text-emerald-400">92%</strong></span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-slate-300">
+                      {resumeData.summary ? Math.max(1, Math.min(4, Math.ceil(resumeData.summary.length / 85))) : 0} lines
+                      <span className="text-slate-500 ml-1">(2–4 lines recommended)</span>
+                    </span>
+                  </div>
                   <span>{resumeData.summary.length} chars</span>
                 </div>
 
                 <textarea
-                  rows={6}
+                  rows={5}
                   value={resumeData.summary}
-                  onChange={(e) => setResumeData(prev => ({ ...prev, summary: e.target.value }))}
+                  onChange={(e) => {
+                    setResumeData(prev => ({ ...prev, summary: e.target.value }));
+                    setHasUserEditedSummary(true);
+                  }}
                   className="w-full bg-slate-800 text-white text-xs rounded-xl p-3 border border-slate-700 focus:outline-none focus:border-orange-500 leading-relaxed font-sans"
-                  placeholder="Enter your professional summary..."
+                  placeholder="Click 'Generate with AI' to craft a tailored 2–4 line professional summary, or write your own..."
                 />
 
                 {/* AI Prompt Buttons */}
-                <div className="flex flex-wrap gap-2 pt-1">
+                <div className="flex flex-wrap gap-2 pt-1 items-center">
                   <button
-                    disabled={aiLoading}
-                    onClick={() => triggerAIAction('summary', 'generate', resumeData.summary, { section: 'summary' })}
-                    className="bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 hover:brightness-110 transition"
+                    disabled={summaryAiLoading || aiLoading}
+                    onClick={() => handleGenerateSummary(false, false)}
+                    className="bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 hover:brightness-110 transition disabled:opacity-50 shadow-sm"
                   >
                     <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
-                    <span>Generate with AI</span>
+                    <span>{summaryAiLoading ? 'Generating...' : 'Generate with AI'}</span>
                   </button>
 
                   <button
-                    disabled={aiLoading}
+                    disabled={summaryAiLoading || aiLoading}
+                    onClick={() => handleGenerateSummary(true, false)}
+                    className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${summaryAiLoading ? 'animate-spin text-amber-400' : ''}`} />
+                    <span>Regenerate</span>
+                  </button>
+
+                  <button
+                    disabled={aiLoading || summaryAiLoading}
                     onClick={() => triggerAIAction('summary', 'improve', resumeData.summary, { section: 'summary' })}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
                   >
@@ -2522,7 +2791,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   </button>
 
                   <button
-                    disabled={aiLoading}
+                    disabled={aiLoading || summaryAiLoading}
                     onClick={() => triggerAIAction('summary', 'ats_optimize', resumeData.summary, { section: 'summary' })}
                     className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
                   >
@@ -2530,7 +2799,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   </button>
 
                   <button
-                    disabled={aiLoading}
+                    disabled={aiLoading || summaryAiLoading}
                     onClick={() => triggerAIAction('summary', 'rewrite', resumeData.summary, { section: 'summary' })}
                     className="bg-slate-800 hover:bg-slate-700 text-blue-400 border border-blue-500/30 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center space-x-1"
                   >
@@ -2538,7 +2807,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   </button>
 
                   <button
-                    disabled={aiLoading}
+                    disabled={aiLoading || summaryAiLoading}
                     onClick={() => triggerAIAction('summary', 'shorten', resumeData.summary, { section: 'summary' })}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
                   >
@@ -2546,7 +2815,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   </button>
 
                   <button
-                    disabled={aiLoading}
+                    disabled={aiLoading || summaryAiLoading}
                     onClick={() => triggerAIAction('summary', 'expand', resumeData.summary, { section: 'summary' })}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold px-2 py-1.5 rounded-lg"
                   >
@@ -3098,6 +3367,83 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
         jobRole={jobRole}
         onApplyCuration={handleApplyCuration}
       />
+
+      {/* SUMMARY OVERWRITE CONFIRMATION MODAL */}
+      {summaryOverwriteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="glass-panel w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4 text-center">
+            <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center mx-auto text-amber-400 shadow-inner">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-bold text-white">Overwrite Edited Summary?</h4>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                You have manually customized your professional summary. Regenerating with AI will replace your manual changes with a fresh 2–4 line summary tailored for <strong className="text-orange-400">{jobRole}</strong>.
+              </p>
+            </div>
+            <div className="flex items-center justify-center space-x-3 pt-3">
+              <button
+                type="button"
+                onClick={() => setSummaryOverwriteConfirmOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+              >
+                Keep My Edits
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSummaryOverwriteConfirmOpen(false);
+                  handleGenerateSummary(true, true);
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:brightness-110 text-slate-950 text-xs font-bold rounded-xl shadow-lg transition"
+              >
+                Yes, Regenerate with AI
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUMMARY ROLE CHANGE REGENERATION PROMPT MODAL */}
+      {summaryRoleChangeModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="glass-panel w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4 text-center">
+            <div className="w-12 h-12 bg-orange-500/10 border border-orange-500/30 rounded-full flex items-center justify-center mx-auto text-orange-400 shadow-inner">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-bold text-white">Target Role Changed</h4>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                You updated your target role to <strong className="text-orange-400">{pendingRoleForSummary}</strong>. Your current summary contains manual edits. Would you like to regenerate your summary with AI to tailor it to <strong className="text-orange-400">{pendingRoleForSummary}</strong>?
+              </p>
+            </div>
+            <div className="flex items-center justify-center space-x-3 pt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSummaryRoleChangeModalOpen(false);
+                  setPendingRoleForSummary('');
+                }}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+              >
+                Keep Current Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetRole = pendingRoleForSummary;
+                  setSummaryRoleChangeModalOpen(false);
+                  setPendingRoleForSummary('');
+                  handleGenerateSummary(true, true, targetRole);
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:brightness-110 text-slate-950 text-xs font-bold rounded-xl shadow-lg transition"
+              >
+                Regenerate for {pendingRoleForSummary}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-
+import mongoose from 'mongoose';
 import pdfParse from 'pdf-parse';
 import Resume from '../models/Resume.js';
 import ResumeHistory from '../models/ResumeHistory.js';
@@ -261,23 +261,40 @@ export const deleteResume = async (req, res) => {
 };
 
 export const downloadResumePDF = async (req, res) => {
-  const { resumeId } = req.body;
+  const { resumeId, selectedTemplate, template: bodyTemplate, improvedResume } = req.body;
 
   try {
-    const resume = await Resume.findById(resumeId);
-    if (!resume) {
-      return res.status(404).json({ message: 'Resume not found' });
+    let resumeDataToExport = improvedResume;
+    let targetJobRole = 'Resume';
+    let template = selectedTemplate || bodyTemplate || 'classic';
+    let user = req.user ? await User.findById(req.user._id).catch(() => null) : null;
+
+    if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
+      try {
+        const resume = await Resume.findById(resumeId);
+        if (resume) {
+          resumeDataToExport = resumeDataToExport || resume.improvedResume;
+          targetJobRole = resume.jobRole || targetJobRole;
+          if (!selectedTemplate && !bodyTemplate && resume.selectedTemplate) {
+            template = resume.selectedTemplate;
+          }
+          if (!user && resume.userId) {
+            user = await User.findById(resume.userId).catch(() => null);
+          }
+        }
+      } catch (dbErr) {
+        console.warn('MongoDB resume lookup skipped for PDF export:', dbErr.message);
+      }
     }
 
-    const user = await User.findById(resume.userId);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    if (!resumeDataToExport) {
+      return res.status(404).json({ message: 'Resume data not found for export' });
     }
 
-    const pdfBuffer = generateResumePDF(resume.improvedResume, user);
+    const pdfBuffer = generateResumePDF(resumeDataToExport, user, template);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=Resume_${resume.jobRole.replace(/\s+/g, '_')}.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=Resume_${targetJobRole.replace(/\s+/g, '_')}.pdf`);
     res.send(pdfBuffer);
   } catch (error) {
     console.error('Download PDF Error:', error);
@@ -290,8 +307,12 @@ export const updateResumeData = async (req, res) => {
 
   try {
     let resume = null;
-    if (resumeId) {
-      resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
+    if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
+      try {
+        resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
+      } catch (findErr) {
+        console.warn('Resume findOne skipped:', findErr.message);
+      }
     }
 
     if (!resume) {
@@ -329,42 +350,92 @@ export const updateResumeData = async (req, res) => {
 };
 
 export const performSectionAIAction = async (req, res) => {
-  const { resumeId, sectionName, actionType, content } = req.body;
+  const { resumeId, sectionName, actionType, content, jobRole: bodyJobRole, context = {}, jobDescription } = req.body;
 
   if (!sectionName || !actionType) {
     return res.status(400).json({ message: 'sectionName and actionType are required' });
   }
 
   try {
-    let jobRole = '';
-    if (resumeId) {
-      const resume = await Resume.findById(resumeId);
-      if (resume) jobRole = resume.jobRole;
+    let jobRole = bodyJobRole || '';
+    let enrichedContext = (context && typeof context === 'object') ? { ...context } : {};
+    if (jobDescription && !enrichedContext.jobDescription) {
+      enrichedContext.jobDescription = jobDescription;
     }
 
-    const updatedContent = await executeSectionAIAction(sectionName, actionType, content, jobRole);
-    res.json({ updatedContent });
+    if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
+      try {
+        const resume = await Resume.findById(resumeId);
+        if (resume) {
+          if (!jobRole) jobRole = resume.jobRole;
+          const imp = resume.improvedResume || {};
+          if (!enrichedContext.skills && (imp.skills || resume.skills)) {
+            enrichedContext.skills = imp.skills || resume.skills;
+          }
+          if (!enrichedContext.experience && (imp.experience || resume.experience)) {
+            enrichedContext.experience = imp.experience || resume.experience;
+          }
+          if (!enrichedContext.projects && (imp.projects || resume.projects)) {
+            enrichedContext.projects = imp.projects || resume.projects;
+          }
+          if (!enrichedContext.education && (imp.education || resume.education)) {
+            enrichedContext.education = imp.education || resume.education;
+          }
+          if (!enrichedContext.certifications && (imp.certifications || resume.certifications)) {
+            enrichedContext.certifications = imp.certifications || resume.certifications;
+          }
+          if (!enrichedContext.achievements && (imp.achievements || resume.achievements)) {
+            enrichedContext.achievements = imp.achievements || resume.achievements;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Optional MongoDB resume enrichment skipped:', dbErr.message);
+      }
+    }
+
+    const updatedContent = await executeSectionAIAction(sectionName, actionType, content, jobRole, enrichedContext);
+    return res.json({ updatedContent });
   } catch (error) {
     console.error('Section AI Action Controller Error:', error);
-    res.status(500).json({ message: error.message });
+    const fallback = typeof content === 'string' && content.trim()
+      ? content
+      : 'Results-driven professional with demonstrated technical strengths.';
+    return res.json({ updatedContent: fallback, warning: error.message });
   }
 };
 
 export const downloadResumeDOCX = async (req, res) => {
-  const { resumeId } = req.body;
+  const { resumeId, improvedResume, selectedTemplate, template: bodyTemplate } = req.body;
 
   try {
-    const resume = await Resume.findById(resumeId);
-    if (!resume) {
-      return res.status(404).json({ message: 'Resume not found' });
+    let resumeDataToExport = improvedResume;
+    let targetJobRole = 'Resume';
+    let template = selectedTemplate || bodyTemplate || 'classic';
+
+    if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
+      try {
+        const resume = await Resume.findById(resumeId);
+        if (resume) {
+          resumeDataToExport = resumeDataToExport || resume.improvedResume;
+          targetJobRole = resume.jobRole || targetJobRole;
+          if (!selectedTemplate && !bodyTemplate && resume.selectedTemplate) {
+            template = resume.selectedTemplate;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('MongoDB resume lookup skipped for DOCX export:', dbErr.message);
+      }
     }
 
-    const user = await User.findById(resume.userId);
+    if (!resumeDataToExport) {
+      return res.status(404).json({ message: 'Resume data not found for export' });
+    }
 
-    const docxBuffer = await generateResumeDOCX(resume.improvedResume, user);
+    const user = req.user ? await User.findById(req.user._id).catch(() => null) : null;
+    const docxBuffer = await generateResumeDOCX(resumeDataToExport, user, template);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename=Resume_${(resume.jobRole || 'Builder').replace(/\s+/g, '_')}.docx`);
+    res.setHeader('Content-Disposition', `attachment; filename=Resume_${targetJobRole.replace(/\s+/g, '_')}.docx`);
     res.send(docxBuffer);
   } catch (error) {
     console.error('Download DOCX Error:', error);

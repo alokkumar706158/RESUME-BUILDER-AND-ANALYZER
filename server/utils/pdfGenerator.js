@@ -4,7 +4,7 @@ import { jsPDF } from 'jspdf';
  * Generates an ATS-friendly, clean, single-column PDF resume.
  * Returns a node Buffer of the PDF.
  */
-export const generateResumePDF = (resumeData, userData) => {
+export const generateResumePDF = (resumeData, userData, template = 'classic') => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -130,17 +130,66 @@ export const generateResumePDF = (resumeData, userData) => {
   }
 
   // 2. Skills
-  if (resumeData.skills && resumeData.skills.length > 0) {
-    printSectionHeader('Technical Skills');
+  const normalizedTemplate = (template || 'classic').toLowerCase();
+  const isModern = normalizedTemplate.includes('modern');
+
+  const techSkills = Array.isArray(resumeData.technicalSkills) ? resumeData.technicalSkills.filter(Boolean) : [];
+  const toolsTech = Array.isArray(resumeData.toolsAndTech) ? resumeData.toolsAndTech.filter(Boolean) : [];
+  const softSkills = Array.isArray(resumeData.softSkills) ? resumeData.softSkills.filter(Boolean) : [];
+
+  const generalSkills = Array.isArray(resumeData.skills)
+    ? resumeData.skills.map(s => {
+        if (typeof s === 'object' && s !== null) {
+          const r = Math.max(1, Math.min(5, Number(s.rating) || 5));
+          return `${s.name || ''} (${r}/5 stars)`.trim();
+        }
+        return String(s || '').trim();
+      }).filter(Boolean)
+    : [];
+
+  const skillsSectionsToRender = [];
+
+  // General Skills (Star Rated) is shown ONLY in Modern ATS
+  if (isModern && generalSkills.length > 0) {
+    skillsSectionsToRender.push({
+      label: 'Skills (Star Rated)',
+      content: generalSkills.join(', ')
+    });
+  }
+
+  // Technical & Soft Skills sections (shown across templates without deleting user data)
+  if (techSkills.length > 0) {
+    skillsSectionsToRender.push({
+      label: 'Technical Skills',
+      content: techSkills.join(', ')
+    });
+  }
+  if (toolsTech.length > 0) {
+    skillsSectionsToRender.push({
+      label: 'Tools & Technologies',
+      content: toolsTech.join(', ')
+    });
+  }
+  if (softSkills.length > 0) {
+    skillsSectionsToRender.push({
+      label: 'Soft Skills',
+      content: softSkills.join(', ')
+    });
+  }
+
+  if (skillsSectionsToRender.length > 0) {
+    printSectionHeader('Skills & Competencies');
     doc.setFont('Helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(51, 65, 85);
-    const skillsText = resumeData.skills.join(', ');
-    const skillsLines = doc.splitTextToSize(skillsText, contentWidth);
-    for (const line of skillsLines) {
-      checkPageBreak(5);
-      doc.text(line, margin, y);
-      y += 4.5;
+    for (const sec of skillsSectionsToRender) {
+      const fullText = `${sec.label}: ${sec.content}`;
+      const lines = doc.splitTextToSize(fullText, contentWidth);
+      for (const line of lines) {
+        checkPageBreak(5);
+        doc.text(line, margin, y);
+        y += 4.5;
+      }
     }
     y += 2;
   }
