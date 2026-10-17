@@ -72,11 +72,25 @@ const ResumeUpload = ({ onUploadSuccess }) => {
 
       toast.success('Resume extracted & saved!', { id: toastId });
       if (onUploadSuccess) {
-        onUploadSuccess(data);
+        let localPdfUrl = '';
+        try {
+          localPdfUrl = URL.createObjectURL(file);
+        } catch (e) {
+          // ignore
+        }
+        onUploadSuccess({
+          ...data,
+          fileObj: file,
+          localPdfUrl: localPdfUrl || data.supabaseStorage?.file_url || ''
+        });
       }
     } catch (error) {
-      console.error(error);
-      const errMsg = error.response?.data?.message || error.message || 'Failed to parse resume PDF. Ensure it is not protected.';
+      console.error('Resume upload error:', error);
+      const errMsg =
+        error.response?.data?.message ||
+        (typeof error.response?.data === 'string' ? error.response.data : null) ||
+        error.message ||
+        'Failed to parse resume PDF. Ensure it is not protected.';
       toast.error(errMsg, { id: toastId });
     } finally {
       setUploading(false);

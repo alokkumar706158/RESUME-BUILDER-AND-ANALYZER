@@ -70,7 +70,12 @@ app.use('/api/resume', resumeRoutes);
 
 // Error Handler
 app.use((err, req, res, next) => {
-  console.error(err);
+  console.error('Server Error:', err);
+  if (err.name === 'MulterError' || (err.message && err.message.toLowerCase().includes('multipart'))) {
+    return res.status(400).json({
+      message: 'Upload format error: ' + (err.message || 'Invalid multipart boundary or file upload format')
+    });
+  }
   res.status(err.status || 500).json({
     message: err.message || 'Internal Server Error'
   });

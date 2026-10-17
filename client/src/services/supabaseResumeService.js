@@ -101,14 +101,38 @@ export const saveResumeBuilderToSupabase = async (user, resumeData, options = {}
     updated_at: new Date().toISOString()
   };
 
+  // 1. If updating an existing saved resume by ID
+  if (options.resumeId && !String(options.resumeId).startsWith('new_')) {
+    const { data: updateData, error: updateError } = await supabase
+      .from('user_resumes')
+      .update(payload)
+      .eq('id', options.resumeId)
+      .eq('user_id', user.id)
+      .select();
+
+    if (!updateError && updateData && updateData.length > 0) {
+      return updateData[0];
+    }
+  }
+
+  // 2. If creating a new resume, insert a new record to support multiple resumes per user
+  const { data: insertData, error: insertError } = await supabase
+    .from('user_resumes')
+    .insert(payload)
+    .select();
+
+  if (!insertError && insertData && insertData.length > 0) {
+    return insertData[0];
+  }
+
+  // 3. Fallback: If table has a single-row constraint on user_id, upsert/update
+  console.warn('Insert notice, trying upsert:', insertError?.message);
   let { data, error } = await supabase
     .from('user_resumes')
     .upsert(payload, { onConflict: 'user_id' })
     .select();
 
-  // Fallback if unique constraint on user_id alone is not active yet
   if (error) {
-    console.warn('Primary upsert on user_id notice:', error.message);
     const { data: existing } = await supabase
       .from('user_resumes')
       .select('id')
@@ -124,14 +148,6 @@ export const saveResumeBuilderToSupabase = async (user, resumeData, options = {}
       if (updateError) throw updateError;
       data = updateData;
       error = null;
-    } else {
-      const { data: insertData, error: insertError } = await supabase
-        .from('user_resumes')
-        .insert(payload)
-        .select();
-      if (insertError) throw insertError;
-      data = insertData;
-      error = null;
     }
   }
 
@@ -140,6 +156,47 @@ export const saveResumeBuilderToSupabase = async (user, resumeData, options = {}
   }
 
   return data && data[0] ? data[0] : null;
+};
+
+/**
+ * Fetch a specific resume for user from Supabase by ID
+ */
+export const fetchUserResumeByIdFromSupabase = async (user, resumeId) => {
+  if (!isSupabaseConfigured || !user || !user.id || !resumeId) {
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('user_resumes')
+      .select('*')
+      .eq('id', resumeId)
+      .eq('user_id', user.id)
+      .limit(1);
+
+    if (error || !data || data.length === 0) {
+      return null;
+    }
+
+    const item = data[0];
+    const resumeObj = item.improved_resume && Object.keys(item.improved_resume).length > 0
+      ? item.improved_resume
+      : (item.extracted_data || {});
+
+    return {
+      _id: item.id,
+      id: item.id,
+      user_id: item.user_id,
+      resumeData: resumeObj,
+      selectedTemplate: item.selected_template || 'classic',
+      jobRole: item.job_role || 'Software Engineer',
+      atsScore: item.ats_score || 85,
+      updatedAt: item.updated_at
+    };
+  } catch (err) {
+    console.error('Error fetching resume by id from Supabase:', err);
+    return null;
+  }
 };
 
 /**

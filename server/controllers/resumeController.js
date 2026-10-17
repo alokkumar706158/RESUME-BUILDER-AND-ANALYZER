@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import pdfParse from 'pdf-parse';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { PDFDocument } from 'pdf-lib';
 import Resume from '../models/Resume.js';
 import ResumeHistory from '../models/ResumeHistory.js';
 import User from '../models/User.js';
@@ -10,11 +12,74 @@ import { generateResumeDOCX } from '../utils/docxGenerator.js';
 
 const extractPdfText = async (buffer) => {
   let isPasswordProtected = false;
+  let extracted = '';
 
-  // Try pdfParse
+  // Strategy 1: Modern pdfjs-dist (legacy Node-compatible build)
+  try {
+    const uint8 = new Uint8Array(buffer);
+    const loadingTask = pdfjsLib.getDocument({
+      data: uint8,
+      disableFontFace: true,
+      stopAtErrors: false
+    });
+    const doc = await loadingTask.promise;
+    const pageTexts = [];
+
+    for (let i = 1; i <= doc.numPages; i++) {
+      try {
+        const page = await doc.getPage(i);
+        const textContent = await page.getTextContent();
+        let lastY;
+        let pageStr = '';
+        for (const item of textContent.items) {
+          if (lastY !== undefined && Math.abs((item.transform ? item.transform[5] : 0) - lastY) > 5) {
+            pageStr += '\n';
+          } else if (pageStr && !pageStr.endsWith(' ') && !pageStr.endsWith('\n')) {
+            pageStr += ' ';
+          }
+          pageStr += item.str || '';
+          lastY = item.transform ? item.transform[5] : lastY;
+        }
+        if (pageStr.trim()) {
+          pageTexts.push(pageStr.trim());
+        }
+      } catch (pageErr) {
+        console.warn(`[PDF Import] Page ${i} extract warning:`, pageErr.message);
+      }
+    }
+
+    extracted = pageTexts.join('\n\n').trim();
+    if (extracted.length >= 15) {
+      return { text: extracted, isPasswordProtected: false };
+    }
+  } catch (err) {
+    const errMsg = (err.message || '').toLowerCase();
+    if (errMsg.includes('password') || errMsg.includes('encrypted') || err.name === 'PasswordException') {
+      return { text: '', isPasswordProtected: true };
+    }
+    console.warn('[PDF Import] pdfjs-dist failed, attempting fallbacks:', err.message);
+  }
+
+  // Strategy 2: pdf-parse
   try {
     const data = await pdfParse(buffer);
-    if (data && data.text && data.text.trim().length > 0) {
+    if (data && data.text && data.text.trim().length >= 15) {
+      return { text: data.text.trim(), isPasswordProtected: false };
+    }
+  } catch (err) {
+    const errMsg = (err.message || '').toLowerCase();
+    if (errMsg.includes('password') || errMsg.includes('encrypted')) {
+      return { text: '', isPasswordProtected: true };
+    }
+    console.warn('[PDF Import] pdf-parse failed:', err.message);
+  }
+
+  // Strategy 3: pdf-lib normalize/rebuild + pdfParse
+  try {
+    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    const rebuiltBuffer = Buffer.from(await pdfDoc.save());
+    const data = await pdfParse(rebuiltBuffer);
+    if (data && data.text && data.text.trim().length >= 15) {
       return { text: data.text.trim(), isPasswordProtected: false };
     }
   } catch (err) {
@@ -24,19 +89,52 @@ const extractPdfText = async (buffer) => {
     }
   }
 
-  return { text: '', isPasswordProtected };
+  // Strategy 4: Raw text streams fallback
+  try {
+    const rawStr = buffer.toString('latin1');
+    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let match;
+    const textPieces = [];
+    while ((match = streamRegex.exec(rawStr)) !== null) {
+      const streamContent = match[1];
+      const textMatches = streamContent.match(/\(([^()]{2,})\)\s*T[jJ]/g);
+      if (textMatches) {
+        for (const tm of textMatches) {
+          const inner = tm.replace(/^\(|\)\s*T[jJ]$/g, '').trim();
+          if (inner && inner.length > 1) {
+            textPieces.push(inner);
+          }
+        }
+      }
+    }
+    if (textPieces.length > 5) {
+      const rawExtracted = textPieces.join(' ').replace(/\\([()\\])/g, '$1').trim();
+      if (rawExtracted.length >= 15) {
+        return { text: rawExtracted, isPasswordProtected: false };
+      }
+    }
+  } catch (rawErr) {
+    console.warn('[PDF Import] Raw stream extraction notice:', rawErr.message);
+  }
+
+  return { text: extracted || '', isPasswordProtected };
 };
 
 export const uploadResume = async (req, res) => {
-  const uploadedFile = req.file || (req.files && req.files[0]);
+  const uploadedFile =
+    req.file ||
+    (req.files && req.files[0]) ||
+    (req.files && req.files.resume && req.files.resume[0]) ||
+    (req.files && req.files.file && req.files.file[0]);
 
   if (!uploadedFile) {
     return res.status(400).json({ message: 'No file uploaded. Please select a PDF file.' });
   }
 
   // Validate mimetype/extension
-  const isPdf = uploadedFile.mimetype === 'application/pdf' || 
-                (uploadedFile.originalname && uploadedFile.originalname.toLowerCase().endsWith('.pdf'));
+  const isPdf =
+    (uploadedFile.mimetype && uploadedFile.mimetype.toLowerCase().includes('pdf')) ||
+    (uploadedFile.originalname && uploadedFile.originalname.toLowerCase().endsWith('.pdf'));
   if (!isPdf) {
     return res.status(400).json({ message: 'Only PDF files are supported. Please upload a valid PDF.' });
   }
@@ -60,7 +158,24 @@ export const uploadResume = async (req, res) => {
     }
 
     // Extract structured data from resume text using local extraction engine
-    const analysis = analyzeResumeTextLocally(cleanedText, 'Software Engineer');
+    let analysis;
+    try {
+      analysis = analyzeResumeTextLocally(cleanedText, 'Software Engineer');
+    } catch (localErr) {
+      console.warn('Local analyzer notice, using default layout:', localErr.message);
+      analysis = {
+        improvedResume: {
+          contactInfo: { fullName: '', email: '', phone: '', linkedin: '', github: '', portfolio: '', address: '' },
+          summary: cleanedText.slice(0, 300),
+          skills: [],
+          experience: [],
+          projects: [],
+          education: [],
+          certifications: [],
+          achievements: []
+        }
+      };
+    }
     const improvedResume = analysis.improvedResume || {};
 
     res.json({
@@ -72,7 +187,7 @@ export const uploadResume = async (req, res) => {
     });
   } catch (error) {
     console.error('Upload Resume Error:', error);
-    res.status(500).json({ message: 'Failed to extract text from PDF: ' + error.message });
+    res.status(500).json({ message: 'Failed to extract text from PDF: ' + (error.message || 'Unknown error') });
   }
 };
 
@@ -84,10 +199,17 @@ export const analyzeResume = async (req, res) => {
   }
 
   try {
-    const analysis = await analyzeResumeText(originalText, jobRole);
+    let analysis;
+    try {
+      analysis = await analyzeResumeText(originalText, jobRole);
+    } catch (aiErr) {
+      console.warn('AI analysis failed, using local analyzer fallback:', aiErr.message);
+      analysis = analyzeResumeTextLocally(originalText, jobRole);
+    }
 
-    const resume = await Resume.create({
-      userId: req.user._id,
+    const userId = req.user?._id || req.user?.id || new mongoose.Types.ObjectId();
+    const resumePayload = {
+      userId,
       originalFile: {
         filename: filename || 'resume.pdf',
         path: '',
@@ -95,12 +217,12 @@ export const analyzeResume = async (req, res) => {
       },
       originalText,
       jobRole,
-      atsScore: analysis.atsScore || 70,
+      atsScore: analysis.atsScore || analysis.overallATS || 70,
       analysis,
       feedback: {
         honestRoast: analysis.honestRoast || 'No roast available.',
-        missingKeywords: [], // deprecated format
-        grammarMistakes: [],
+        missingKeywords: analysis.missingKeywords || [],
+        grammarMistakes: analysis.grammarMistakes || [],
         resumeStructure: '',
         skillsFeedback: '',
         projectFeedback: '',
@@ -124,19 +246,34 @@ export const analyzeResume = async (req, res) => {
         achievements: [],
         certifications: []
       }
-    });
+    };
 
-    await ResumeHistory.create({
-      resumeId: resume._id,
-      versionNumber: 1,
-      improvedResume: resume.improvedResume,
-      atsScore: resume.atsScore
-    });
+    let resume;
+    try {
+      resume = await Resume.create(resumePayload);
+      try {
+        await ResumeHistory.create({
+          resumeId: resume._id,
+          versionNumber: 1,
+          improvedResume: resume.improvedResume,
+          atsScore: resume.atsScore
+        });
+      } catch (histErr) {
+        console.warn('ResumeHistory creation warning:', histErr.message);
+      }
+    } catch (dbErr) {
+      console.warn('Resume DB storage warning, returning memory object:', dbErr.message);
+      resume = {
+        _id: new mongoose.Types.ObjectId().toString(),
+        ...resumePayload,
+        createdAt: new Date().toISOString()
+      };
+    }
 
     res.status(201).json(resume);
   } catch (error) {
     console.error('Analyze Resume Error:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: error.message || 'Failed to analyze resume' });
   }
 };
 
@@ -261,13 +398,14 @@ export const deleteResume = async (req, res) => {
 };
 
 export const downloadResumePDF = async (req, res) => {
-  const { resumeId, selectedTemplate, template: bodyTemplate, improvedResume } = req.body;
+  const { resumeId, selectedTemplate, template: bodyTemplate, improvedResume, resumeData, jobRole: bodyJobRole } = req.body;
 
   try {
-    let resumeDataToExport = improvedResume;
-    let targetJobRole = 'Resume';
+    let resumeDataToExport = improvedResume || resumeData;
+    let targetJobRole = bodyJobRole || 'Resume';
     let template = selectedTemplate || bodyTemplate || 'classic';
     let user = req.user ? await User.findById(req.user._id).catch(() => null) : null;
+
 
     if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
       try {
@@ -316,8 +454,12 @@ export const updateResumeData = async (req, res) => {
     }
 
     if (!resume) {
+      const validUserId = req.user && req.user._id && mongoose.isValidObjectId(req.user._id)
+        ? req.user._id
+        : new mongoose.Types.ObjectId();
+
       resume = new Resume({
-        userId: req.user._id,
+        userId: validUserId,
         originalFile: { filename: 'builder_resume.pdf', path: '', size: 0 },
         originalText: 'Created via Resume Builder',
         jobRole: jobRole || 'Software Engineer',
@@ -405,12 +547,13 @@ export const performSectionAIAction = async (req, res) => {
 };
 
 export const downloadResumeDOCX = async (req, res) => {
-  const { resumeId, improvedResume, selectedTemplate, template: bodyTemplate } = req.body;
+  const { resumeId, improvedResume, resumeData, selectedTemplate, template: bodyTemplate } = req.body;
 
   try {
-    let resumeDataToExport = improvedResume;
+    let resumeDataToExport = improvedResume || resumeData;
     let targetJobRole = 'Resume';
     let template = selectedTemplate || bodyTemplate || 'classic';
+
 
     if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
       try {

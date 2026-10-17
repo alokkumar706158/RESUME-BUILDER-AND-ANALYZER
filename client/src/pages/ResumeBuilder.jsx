@@ -46,7 +46,7 @@ import PhotoEditorModal from '../components/PhotoEditorModal';
 import ImportResumeModal from '../components/ImportResumeModal';
 import ImportCurationModal from '../components/ImportCurationModal';
 import { useAuth } from '../context/AuthContext';
-import { saveResumeBuilderToSupabase, fetchLatestUserResumeFromSupabase } from '../services/supabaseResumeService';
+import { saveResumeBuilderToSupabase, fetchLatestUserResumeFromSupabase, fetchUserResumeByIdFromSupabase } from '../services/supabaseResumeService';
 import { sanitizeContactInfo } from '../utils/linkSanitizer';
 
 const TARGET_JOB_ROLES = [
@@ -140,7 +140,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   const setActiveStep = (stepOrFn) => {
     setInternalStep(prev => {
       const nextStep = typeof stepOrFn === 'function' ? stepOrFn(prev) : stepOrFn;
-      const clampedStep = Math.max(1, Math.min(10, nextStep));
+      const clampedStep = Math.max(1, Math.min(9, nextStep));
       
       if (!isEmbedded) {
         const newParams = new URLSearchParams(window.location.search);
@@ -605,8 +605,28 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     try {
       setLoading(true);
 
-      // 1. Primary Load: Load from Supabase if user is logged in
-      if (user && user.id) {
+      // 1. Primary Load: If a specific resume id was requested from Supabase
+      if (user && user.id && id) {
+        const supabaseResume = await fetchUserResumeByIdFromSupabase(user, id);
+        if (supabaseResume && supabaseResume.resumeData) {
+          setResumeId(supabaseResume.id);
+          if (supabaseResume.jobRole) setJobRole(supabaseResume.jobRole);
+          if (supabaseResume.selectedTemplate) setSelectedTemplate(supabaseResume.selectedTemplate);
+          if (supabaseResume.atsScore) setAtsScore(supabaseResume.atsScore);
+
+          setResumeData(prev => ({
+            ...prev,
+            ...supabaseResume.resumeData,
+            contactInfo: sanitizeContactInfo(supabaseResume.resumeData.contactInfo || prev.contactInfo),
+            education: sanitizeEducationList(supabaseResume.resumeData.education || prev.education)
+          }));
+          setLoading(false);
+          return;
+        }
+      }
+
+      // If user is logged in and no specific ID was requested, load latest active resume
+      if (user && user.id && !id) {
         const supabaseResume = await fetchLatestUserResumeFromSupabase(user);
         if (supabaseResume && supabaseResume.resumeData) {
           setResumeId(supabaseResume.id);
@@ -662,12 +682,16 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       if (user && user.id) {
         try {
           const result = await saveResumeBuilderToSupabase(user, resumeData, {
+            resumeId,
             selectedTemplate,
             jobRole,
             atsScore
           });
           if (result && result.id) {
             setResumeId(result.id);
+            if (!id) {
+              window.history.replaceState(null, '', `/builder/${result.id}`);
+            }
           }
           savedToCloud = true;
         } catch (supabaseErr) {
@@ -718,10 +742,12 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   };
 
   const handleSaveAndNext = async () => {
-    await handleSaveSection(false);
     if (activeStep < 9) {
+      await handleSaveSection(false);
       setActiveStep(prev => prev + 1);
       toast.success('Section saved! Moving to next step.', { icon: '➔' });
+    } else {
+      await handleSaveSection(true);
     }
   };
 
@@ -963,7 +989,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       toast.loading('Generating PDF...', { id: 'pdf-toast' });
       const response = await api.post(
         '/resume/download',
-        { resumeId, selectedTemplate, improvedResume: resumeData },
+        { resumeId, selectedTemplate, jobRole, improvedResume: resumeData },
         { responseType: 'blob' }
       );
       const blob = new Blob([response.data], { type: 'application/pdf' });
@@ -3061,8 +3087,8 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                 onClick={handleSaveAndNext}
                 className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl flex items-center space-x-1.5 shadow-md transition"
               >
-                <span>Save & Next</span>
-                <ChevronRight className="w-4 h-4" />
+                <span>{activeStep === 9 ? 'Save Resume' : 'Save & Next'}</span>
+                {activeStep < 9 && <ChevronRight className="w-4 h-4" />}
               </button>
             </div>
           </div>
