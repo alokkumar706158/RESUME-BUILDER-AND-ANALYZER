@@ -1,5 +1,6 @@
+import './config/env.js';
+import { validateEnv } from './config/env.js';
 import express from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -8,12 +9,14 @@ import connectDB from './config/db.js';
 import authRoutes from './routes/auth.js';
 import resumeRoutes from './routes/resume.js';
 
-dotenv.config();
+// Validate required environment variables at startup (without logging secrets)
+validateEnv();
 
 // Connect to MongoDB
 connectDB();
 
 const app = express();
+app.set('trust proxy', 1);
 
 // Security Middleware (Helmet)
 app.use(helmet());
@@ -71,10 +74,17 @@ app.use('/api/resume', resumeRoutes);
 // Error Handler
 app.use((err, req, res, next) => {
   console.error('Server Error:', err);
-  if (err.name === 'MulterError' || (err.message && err.message.toLowerCase().includes('multipart'))) {
-    return res.status(400).json({
-      message: 'Upload format error: ' + (err.message || 'Invalid multipart boundary or file upload format')
-    });
+  if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'File is too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ message: 'Upload error: ' + (err.message || 'Invalid file upload') });
+  }
+  if (err.message && (
+    err.message.toLowerCase().includes('multipart') ||
+    err.message.toLowerCase().includes('only pdf')
+  )) {
+    return res.status(400).json({ message: err.message });
   }
   res.status(err.status || 500).json({
     message: err.message || 'Internal Server Error'

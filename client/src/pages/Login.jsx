@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -13,6 +13,16 @@ const Login = () => {
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const { register, handleSubmit, formState: { errors } } = useForm();
+
+  // Surface errors redirected back from the Google OAuth callback.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get('error');
+    if (oauthError) {
+      toast.error(decodeURIComponent(oauthError).replace(/\+/g, ' '));
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   const onSubmit = async (data) => {
     setSubmitting(true);

@@ -46,7 +46,6 @@ import PhotoEditorModal from '../components/PhotoEditorModal';
 import ImportResumeModal from '../components/ImportResumeModal';
 import ImportCurationModal from '../components/ImportCurationModal';
 import { useAuth } from '../context/AuthContext';
-import { saveResumeBuilderToSupabase, fetchLatestUserResumeFromSupabase, fetchUserResumeByIdFromSupabase } from '../services/supabaseResumeService';
 import { sanitizeContactInfo } from '../utils/linkSanitizer';
 
 const TARGET_JOB_ROLES = [
@@ -525,6 +524,11 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
   const [autoSaveStatus, setAutoSaveStatus] = useState('saved');
 
+  // Fingerprints used to avoid redundant MongoDB autosaves and to skip
+  // persisting the untouched default resume for brand new drafts.
+  const pristineResumeFingerprint = React.useRef(JSON.stringify(resumeData));
+  const lastSavedFingerprint = React.useRef('');
+
   // Load from local storage or DB or pending import
   useEffect(() => {
     // Check if there is a pending import from PDF upload
@@ -601,66 +605,89 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     return () => clearTimeout(saveTimer);
   }, [resumeData, selectedTemplate, jobRole, resumeId, id, loading]);
 
+  // AUTOSAVE TO MONGODB: Debounced persistence of the full resume to the backend.
+  // Skips the untouched default draft so brand new users don't create empty records.
+  useEffect(() => {
+    if (loading || !user?.id || !resumeData) return;
+
+    const fingerprint = JSON.stringify({ resumeData, selectedTemplate, jobRole });
+    if (!resumeId && JSON.stringify(resumeData) === pristineResumeFingerprint.current) {
+      return;
+    }
+    if (fingerprint === lastSavedFingerprint.current) {
+      return;
+    }
+
+    setAutoSaveStatus('saving');
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.put('/resume/update', {
+          resumeId,
+          improvedResume: resumeData,
+          selectedTemplate,
+          jobRole,
+          atsScore
+        });
+        if (res.data?._id) {
+          setResumeId(prev => prev || res.data._id);
+          lastSavedFingerprint.current = fingerprint;
+        }
+      } catch (err) {
+        console.warn('Auto-save to MongoDB failed:', err?.message);
+      } finally {
+        setAutoSaveStatus('saved');
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [resumeData, selectedTemplate, jobRole, resumeId, loading, user]);
+
   const fetchResumeFromDB = async () => {
     try {
       setLoading(true);
 
-      // 1. Primary Load: If a specific resume id was requested from Supabase
-      if (user && user.id && id) {
-        const supabaseResume = await fetchUserResumeByIdFromSupabase(user, id);
-        if (supabaseResume && supabaseResume.resumeData) {
-          setResumeId(supabaseResume.id);
-          if (supabaseResume.jobRole) setJobRole(supabaseResume.jobRole);
-          if (supabaseResume.selectedTemplate) setSelectedTemplate(supabaseResume.selectedTemplate);
-          if (supabaseResume.atsScore) setAtsScore(supabaseResume.atsScore);
-
+      const applyDbResume = (dbResume) => {
+        if (!dbResume) return false;
+        setResumeId(dbResume._id);
+        if (dbResume.jobRole) setJobRole(dbResume.jobRole);
+        if (dbResume.atsScore) setAtsScore(dbResume.atsScore);
+        if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
+        if (dbResume.improvedResume) {
           setResumeData(prev => ({
             ...prev,
-            ...supabaseResume.resumeData,
-            contactInfo: sanitizeContactInfo(supabaseResume.resumeData.contactInfo || prev.contactInfo),
-            education: sanitizeEducationList(supabaseResume.resumeData.education || prev.education)
+            ...dbResume.improvedResume,
+            contactInfo: sanitizeContactInfo(dbResume.improvedResume.contactInfo || prev.contactInfo),
+            education: sanitizeEducationList(dbResume.improvedResume.education || prev.education)
           }));
-          setLoading(false);
-          return;
         }
-      }
+        return true;
+      };
 
-      // If user is logged in and no specific ID was requested, load latest active resume
-      if (user && user.id && !id) {
-        const supabaseResume = await fetchLatestUserResumeFromSupabase(user);
-        if (supabaseResume && supabaseResume.resumeData) {
-          setResumeId(supabaseResume.id);
-          if (supabaseResume.jobRole) setJobRole(supabaseResume.jobRole);
-          if (supabaseResume.selectedTemplate) setSelectedTemplate(supabaseResume.selectedTemplate);
-          if (supabaseResume.atsScore) setAtsScore(supabaseResume.atsScore);
-
-          setResumeData(prev => ({
-            ...prev,
-            ...supabaseResume.resumeData,
-            contactInfo: sanitizeContactInfo(supabaseResume.resumeData.contactInfo || prev.contactInfo),
-            education: sanitizeEducationList(supabaseResume.resumeData.education || prev.education)
-          }));
-          setLoading(false);
-          return;
-        }
-      }
-
-      // 2. Fallback Load: Express/MongoDB API
-      if (id) {
-        const res = await api.get(`/resume/${id}`);
-        if (res.data && res.data.resume) {
-          const dbResume = res.data.resume;
-          setResumeId(dbResume._id);
-          if (dbResume.jobRole) setJobRole(dbResume.jobRole);
-          if (dbResume.atsScore) setAtsScore(dbResume.atsScore);
-          if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
-          if (dbResume.improvedResume) {
-            setResumeData(prev => ({
-              ...prev,
-              ...dbResume.improvedResume,
-              contactInfo: sanitizeContactInfo(dbResume.improvedResume.contactInfo || prev.contactInfo),
-              education: sanitizeEducationList(dbResume.improvedResume.education || prev.education)
-            }));
+      if (user && user.id) {
+        // 1. Load a specific resume when an id is present in the route.
+        if (id) {
+          try {
+            const res = await api.get(`/resume/${id}`);
+            if (applyDbResume(res.data?.resume)) {
+              setLoading(false);
+              return;
+            }
+          } catch (err) {
+            console.warn('Failed to load resume by id:', err?.message);
+          }
+        } else {
+          // 2. Otherwise restore the most recently updated resume for this user.
+          try {
+            const res = await api.get('/resume/latest');
+            if (applyDbResume(res.data?.resume)) {
+              setLoading(false);
+              return;
+            }
+          } catch (err) {
+            // 404 simply means the user has no saved resume yet.
+            if (err?.response?.status !== 404) {
+              console.warn('Failed to load latest resume:', err?.message);
+            }
           }
         }
       }
@@ -678,47 +705,26 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
       let savedToCloud = false;
 
-      // 1. Primary Save: Supabase Database ('user_resumes' table)
+      // Persist to MongoDB via the Express API.
       if (user && user.id) {
-        try {
-          const result = await saveResumeBuilderToSupabase(user, resumeData, {
-            resumeId,
-            selectedTemplate,
-            jobRole,
-            atsScore
-          });
-          if (result && result.id) {
-            setResumeId(result.id);
-            if (!id) {
-              window.history.replaceState(null, '', `/builder/${result.id}`);
-            }
-          }
-          savedToCloud = true;
-        } catch (supabaseErr) {
-          console.error('Supabase save error:', supabaseErr);
-        }
-      }
-
-      // 2. Secondary Save: Express/MongoDB backend API
-      if (!savedToCloud) {
         try {
           const payload = {
             resumeId,
             improvedResume: resumeData,
             selectedTemplate,
-            jobRole
+            jobRole,
+            atsScore
           };
           const res = await api.put('/resume/update', payload);
           if (res.data && res.data._id) {
             setResumeId(res.data._id);
-            if (res.data.atsScore) {
-              setPreviousScore(atsScore);
-              setAtsScore(res.data.atsScore);
+            if (!id) {
+              window.history.replaceState(null, '', `/builder/${res.data._id}`);
             }
           }
           savedToCloud = true;
         } catch (apiErr) {
-          console.error('Express API save error:', apiErr);
+          console.error('MongoDB save error:', apiErr);
         }
       }
 

@@ -18,10 +18,8 @@ const Signup = () => {
     setSubmitting(true);
     try {
       await registerAuth(data.name, data.email, data.password);
-      toast.success(`Verification email sent to ${data.email}. Please verify your email before logging in.`, {
-        duration: 7000
-      });
-      navigate('/login');
+      toast.success('Account created successfully!');
+      navigate('/dashboard');
     } catch (err) {
       console.error('Registration Error:', err);
       const message = typeof err === 'string' ? err : (err?.response?.data?.message || err?.message || 'Failed to register account.');

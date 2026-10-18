@@ -1,12 +1,17 @@
 import { GoogleGenAI } from '@google/genai';
-import dotenv from 'dotenv';
+import '../config/env.js';
 import { analyzeResumeTextLocally } from './localAnalyzer.js';
 
-dotenv.config();
-
-const apiKey = process.env.GEMINI_API_KEY?.trim();
-
-const genAI = apiKey && !apiKey.startsWith('your_') ? new GoogleGenAI({ apiKey }) : null;
+let _genAI = null;
+const getGenAI = () => {
+  if (!_genAI) {
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (apiKey && !apiKey.startsWith('your_')) {
+      _genAI = new GoogleGenAI({ apiKey });
+    }
+  }
+  return _genAI;
+};
 
 const safeParseJson = (rawText) => {
   if (!rawText) {
@@ -203,6 +208,7 @@ ${resumeText}
 `;
 
   try {
+    const genAI = getGenAI();
     if (!genAI) {
       console.warn('Gemini API Key missing or invalid. Using local analyzer fallback.');
       return analyzeResumeTextLocally(resumeText, jobRole);
@@ -348,6 +354,7 @@ Ensure the returned JSON structure is a single object with the exact keys:
 `;
 
   try {
+    const genAI = getGenAI();
     if (!genAI) {
       return currentResumeData;
     }
@@ -383,6 +390,7 @@ ${JSON.stringify(currentResumeData, null, 2)}
 `;
 
   try {
+    const genAI = getGenAI();
     if (!genAI) {
       return safeParseJson(JSON.stringify(currentResumeData));
     }
@@ -541,6 +549,7 @@ CRITICAL REQUIREMENTS:
 `;
 
       try {
+        const genAI = getGenAI();
         if (!genAI) {
           return buildGroundedSummary(targetRole, safeContext, content);
         }
@@ -594,6 +603,7 @@ Return ONLY valid JSON with a single key "updatedContent".
 `;
 
   try {
+    const genAI = getGenAI();
     if (!genAI) {
       return content;
     }

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -14,87 +13,30 @@ const AuthCallback = () => {
     if (processedRef.current) return;
     processedRef.current = true;
 
-    const processUserSession = async (session) => {
-      if (!session?.user) return false;
-      const user = session.user;
-      const rawName = user.user_metadata?.full_name || 
-                      user.user_metadata?.name || 
-                      user.email?.split('@')[0] || 
-                      'User';
-      const cleanName = rawName.trim();
-
-      if (!user.user_metadata?.full_name && cleanName) {
-        try {
-          await supabase.auth.updateUser({
-            data: { full_name: cleanName }
-          });
-        } catch (updateErr) {
-          console.warn('Could not update metadata name:', updateErr);
-        }
-      }
-
-      if (session.access_token) {
-        localStorage.setItem('resumeroast_auth_token', session.access_token);
-      }
-
-      if (checkAuth) {
-        await checkAuth();
-      }
-
-      toast.success(`Welcome back, ${cleanName}!`);
-      navigate('/dashboard', { replace: true });
-      return true;
-    };
-
-    const handleOAuthCallback = async () => {
+    const handleCallback = async () => {
       try {
-        // Inspect Hash and Search query params for OAuth errors
-        const hashStr = window.location.hash ? window.location.hash.substring(1) : '';
-        const hashParams = new URLSearchParams(hashStr);
         const searchParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(
+          window.location.hash ? window.location.hash.substring(1) : ''
+        );
 
-        const oauthError = hashParams.get('error_description') || 
-                           hashParams.get('error') || 
-                           searchParams.get('error_description') || 
-                           searchParams.get('error');
-
-        if (oauthError) {
-          const cleanMsg = decodeURIComponent(oauthError).replace(/\+/g, ' ');
-          toast.error(cleanMsg);
+        const errorMessage = searchParams.get('error') || hashParams.get('error');
+        if (errorMessage) {
+          toast.error(decodeURIComponent(errorMessage).replace(/\+/g, ' '));
           navigate('/login', { replace: true });
           return;
         }
 
-        // Try getting session from Supabase client
-        const { data: { session }, error } = await supabase.auth.getSession();
-
-        if (error) {
-          toast.error(error.message || 'Google authentication failed.');
-          navigate('/login', { replace: true });
-          return;
+        // The backend passes the access token in the URL hash for bearer fallback.
+        const token = hashParams.get('token');
+        if (token) {
+          localStorage.setItem('resumeroast_auth_token', token);
         }
 
-        if (session?.user) {
-          await processUserSession(session);
-          return;
-        }
-
-        // If session not hydrated yet, listen for auth state change
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, authSession) => {
-          if (authSession?.user) {
-            subscription.unsubscribe();
-            await processUserSession(authSession);
-          }
-        });
-
-        // Safety timeout if OAuth flow fails or is canceled
-        const timer = setTimeout(() => {
-          subscription?.unsubscribe();
-          toast.error('Authentication timed out. Please try signing in again.');
-          navigate('/login', { replace: true });
-        }, 6000);
-
-        return () => clearTimeout(timer);
+        // Cookies are also set by the backend, so /auth/me will hydrate the session.
+        await checkAuth();
+        toast.success('Signed in successfully!');
+        navigate('/dashboard', { replace: true });
       } catch (err) {
         console.error('OAuth Callback Error:', err);
         toast.error('An error occurred during authentication.');
@@ -102,7 +44,7 @@ const AuthCallback = () => {
       }
     };
 
-    handleOAuthCallback();
+    handleCallback();
   }, [navigate, checkAuth]);
 
   return (

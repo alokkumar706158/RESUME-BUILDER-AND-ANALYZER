@@ -3,11 +3,8 @@ import { useDropzone } from 'react-dropzone';
 import { UploadCloud, File } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { useAuth } from '../context/AuthContext';
-import { saveResumeToSupabase } from '../services/supabaseResumeService';
 
 const ResumeUpload = ({ onUploadSuccess }) => {
-  const { user } = useAuth();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
 
@@ -46,29 +43,12 @@ const ResumeUpload = ({ onUploadSuccess }) => {
 
     const formData = new FormData();
     formData.append('resume', file);
-    formData.append('file', file);
 
     setUploading(true);
     const toastId = toast.loading('Extracting text from PDF...');
 
     try {
       const { data } = await api.post('/resume/upload', formData);
-
-      // Save original PDF to Supabase Storage & DB
-      if (user) {
-        try {
-          const supabaseResult = await saveResumeToSupabase(
-            file,
-            user,
-            data?.extractedData || data?.improvedResume || null
-          );
-          if (supabaseResult) {
-            data.supabaseStorage = supabaseResult;
-          }
-        } catch (storageErr) {
-          console.warn('Supabase storage backup notice:', storageErr);
-        }
-      }
 
       toast.success('Resume extracted & saved!', { id: toastId });
       if (onUploadSuccess) {
@@ -81,7 +61,7 @@ const ResumeUpload = ({ onUploadSuccess }) => {
         onUploadSuccess({
           ...data,
           fileObj: file,
-          localPdfUrl: localPdfUrl || data.supabaseStorage?.file_url || ''
+          localPdfUrl: localPdfUrl || ''
         });
       }
     } catch (error) {

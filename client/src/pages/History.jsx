@@ -8,39 +8,19 @@ import {
   Briefcase, 
   Calendar 
 } from 'lucide-react';
-import api from '../services/api';
+import api, { getApiBaseUrl } from '../services/api';
 import toast from 'react-hot-toast';
 import Loader from '../components/Loader';
-import { useAuth } from '../context/AuthContext';
-import { fetchUserResumesFromSupabase, deleteUserResumeFromSupabase } from '../services/supabaseResumeService';
 
 const History = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [resumes, setResumes] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchHistory = async () => {
     try {
-      let mongoHistory = [];
-      try {
-        const { data } = await api.get('/resume/history');
-        mongoHistory = data || [];
-      } catch (err) {
-        console.warn('MongoDB history error:', err.message);
-      }
-
-      let supabaseHistory = [];
-      if (user) {
-        supabaseHistory = await fetchUserResumesFromSupabase(user);
-      }
-
-      const combined = [...supabaseHistory, ...mongoHistory].sort((a, b) => 
-        new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at)
-      );
-
-      const unique = Array.from(new Map(combined.map(item => [item._id || item.filename, item])).values());
-      setResumes(unique);
+      const { data } = await api.get('/resume/history');
+      setResumes(data || []);
     } catch (error) {
       console.error(error);
       toast.error('Failed to load scan catalog.');
@@ -58,11 +38,7 @@ const History = () => {
     if (!window.confirm('Delete this resume permanently?')) return;
 
     try {
-      if (item.isSupabase) {
-        await deleteUserResumeFromSupabase(item._id, item.file_path, user);
-      } else {
-        await api.delete(`/resume/${item._id}`);
-      }
+      await api.delete(`/resume/${item._id}`);
       setResumes(resumes.filter(r => r._id !== item._id));
       toast.success('Resume deleted.');
     } catch (error) {
@@ -128,14 +104,8 @@ const History = () => {
               key={item._id}
               className="glass-panel glass-panel-hover p-6 rounded-2xl border border-slate-800 flex flex-col justify-between group h-64 cursor-pointer"
               onClick={() => {
-                if (item.isSupabase) {
-                  if (item.extracted_data) {
-                    localStorage.setItem('resumeroast_pending_import', JSON.stringify({
-                      ...item.extracted_data,
-                      filename: item.filename
-                    }));
-                  }
-                  navigate('/builder');
+                if (item.originalText === 'Created via Resume Builder') {
+                  navigate(`/builder/${item._id}`);
                 } else {
                   navigate(`/analysis/${item._id}`);
                 }
@@ -183,9 +153,9 @@ const History = () => {
 
               {/* Bottom: Action Buttons */}
               <div className="flex items-center justify-between border-t border-slate-850 pt-4 mt-6">
-                {item.isSupabase && item.file_url ? (
+                {(item.fileId || item.originalFile?.fileId || item.originalFile?.path) ? (
                   <a
-                    href={item.file_url}
+                    href={`${getApiBaseUrl()}/resume/${item._id}/file`}
                     target="_blank"
                     rel="noreferrer"
                     onClick={(e) => e.stopPropagation()}
@@ -211,7 +181,7 @@ const History = () => {
 
                 <div className="flex items-center space-x-3">
                   <span className="flex items-center text-xs font-bold text-brandPurple group-hover:underline">
-                    <span>{item.isSupabase ? 'Edit in Builder' : 'View Scan'}</span>
+                    <span>{item.originalText === 'Created via Resume Builder' ? 'Edit in Builder' : 'View Scan'}</span>
                     <ArrowUpRight className="w-4 h-4 ml-0.5" />
                   </span>
                   <button

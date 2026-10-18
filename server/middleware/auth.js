@@ -1,14 +1,19 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
+const ACCESS_SECRET = () => process.env.JWT_ACCESS_SECRET || 'resumeroastaccesssecretkey';
+
+// Verifies the JWT (HttpOnly cookie or Authorization header) and loads the owner
+// from MongoDB. Every private route relies on this for authentication + ownership.
 export const protect = async (req, res, next) => {
   let token;
 
-  // Check HttpOnly cookies first, then check Authorization header
   if (req.cookies && req.cookies.accessToken) {
     token = req.cookies.accessToken;
-  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
     token = req.headers.authorization.split(' ')[1];
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
   }
 
   if (!token) {
@@ -16,43 +21,27 @@ export const protect = async (req, res, next) => {
   }
 
   try {
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET || 'resumeroastaccesssecretkey');
-    } catch {
-      // Decode Supabase JWT or alternative provider tokens
-      decoded = jwt.decode(token);
-    }
+    const decoded = jwt.verify(token, ACCESS_SECRET());
+    const userId = decoded.id || decoded.sub;
 
-    if (!decoded) {
+    if (!userId) {
       return res.status(401).json({ message: 'Not authorized, invalid token' });
     }
 
-    const userId = decoded.id || decoded.sub;
-    let user = null;
-
-    try {
-      user = await User.findById(userId).select('-password');
-    } catch {
-      // User might be a Supabase UUID or not stored in Mongo User table
-      user = null;
-    }
-
+    const user = await User.findById(userId).select('-password -refreshToken');
     if (!user) {
-      // Create user context from token claims
-      req.user = {
-        _id: userId,
-        id: userId,
-        name: decoded.user_metadata?.full_name || decoded.name || decoded.email?.split('@')[0] || 'User',
-        email: decoded.email || ''
-      };
-    } else {
-      req.user = user;
+      return res.status(401).json({ message: 'Not authorized, user no longer exists' });
     }
 
+    req.user = user;
     next();
   } catch (error) {
-    console.error('JWT Verification Error:', error);
-    return res.status(401).json({ message: 'Not authorized, token failed or expired' });
+    const message =
+      error.name === 'TokenExpiredError'
+        ? 'Not authorized, token expired'
+        : 'Not authorized, token failed';
+    return res.status(401).json({ message });
   }
 };
+
+export default protect;

@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import pdfParse from 'pdf-parse';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { PDFDocument } from 'pdf-lib';
@@ -9,12 +12,69 @@ import { analyzeResumeText, rewriteEntireResume, rewriteResumeSection, executeSe
 import { analyzeResumeTextLocally } from '../services/localAnalyzer.js';
 import { generateResumePDF } from '../utils/pdfGenerator.js';
 import { generateResumeDOCX } from '../utils/docxGenerator.js';
+import {
+  uploadToGridFS,
+  downloadFromGridFS,
+  checkGridFSFileExists,
+  deleteFromGridFS
+} from '../utils/gridfs.js';
+
+// Local disk storage root for uploaded PDFs (configurable for deployment).
+const UPLOAD_ROOT = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.resolve(process.cwd(), 'uploads');
+
+const sanitizeFilename = (name) =>
+  (name || 'resume.pdf')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_{2,}/g, '_')
+    .slice(-120);
+
+// Persist an uploaded PDF buffer to disk under the owner's folder.
+// Returns a relative path (POSIX style) safe to store in MongoDB.
+const persistUploadedPdf = (buffer, userId, originalName) => {
+  const ownerDir = path.join(UPLOAD_ROOT, String(userId));
+  fs.mkdirSync(ownerDir, { recursive: true });
+
+  const safeOriginal = sanitizeFilename(originalName);
+  const storedName = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}_${safeOriginal}`;
+  const absPath = path.join(ownerDir, storedName);
+  fs.writeFileSync(absPath, buffer);
+
+  const relPath = path.posix.join(String(userId), storedName);
+  return { storedName, absPath, relPath, size: buffer.length, filename: originalName || 'resume.pdf' };
+};
+
+// Resolve a stored relative path to an absolute path, ensuring it stays inside UPLOAD_ROOT.
+const resolveStoredPath = (relPath) => {
+  if (!relPath) return null;
+  const absPath = path.resolve(UPLOAD_ROOT, relPath);
+  const rootWithSep = UPLOAD_ROOT.endsWith(path.sep) ? UPLOAD_ROOT : UPLOAD_ROOT + path.sep;
+  if (absPath !== UPLOAD_ROOT && !absPath.startsWith(rootWithSep)) {
+    return null;
+  }
+  return absPath;
+};
 
 const extractPdfText = async (buffer) => {
   let isPasswordProtected = false;
   let extracted = '';
 
-  // Strategy 1: Modern pdfjs-dist (legacy Node-compatible build)
+  // Strategy 1: pdf-parse (Fast, robust Node.js text extraction)
+  try {
+    const data = await pdfParse(buffer);
+    if (data && data.text && data.text.trim().length >= 15) {
+      return { text: data.text.trim(), isPasswordProtected: false };
+    }
+  } catch (err) {
+    const errMsg = (err.message || '').toLowerCase();
+    if (errMsg.includes('password') || errMsg.includes('encrypted')) {
+      return { text: '', isPasswordProtected: true };
+    }
+    console.warn('[PDF Import] pdf-parse fallback needed:', err.message);
+  }
+
+  // Strategy 2: Modern pdfjs-dist (legacy Node-compatible build)
   try {
     const uint8 = new Uint8Array(buffer);
     const loadingTask = pdfjsLib.getDocument({
@@ -58,20 +118,6 @@ const extractPdfText = async (buffer) => {
       return { text: '', isPasswordProtected: true };
     }
     console.warn('[PDF Import] pdfjs-dist failed, attempting fallbacks:', err.message);
-  }
-
-  // Strategy 2: pdf-parse
-  try {
-    const data = await pdfParse(buffer);
-    if (data && data.text && data.text.trim().length >= 15) {
-      return { text: data.text.trim(), isPasswordProtected: false };
-    }
-  } catch (err) {
-    const errMsg = (err.message || '').toLowerCase();
-    if (errMsg.includes('password') || errMsg.includes('encrypted')) {
-      return { text: '', isPasswordProtected: true };
-    }
-    console.warn('[PDF Import] pdf-parse failed:', err.message);
   }
 
   // Strategy 3: pdf-lib normalize/rebuild + pdfParse
@@ -121,13 +167,22 @@ const extractPdfText = async (buffer) => {
 };
 
 export const uploadResume = async (req, res) => {
-  const uploadedFile =
-    req.file ||
-    (req.files && req.files[0]) ||
-    (req.files && req.files.resume && req.files.resume[0]) ||
-    (req.files && req.files.file && req.files.file[0]);
+  let uploadedFile = null;
+  if (req.file) {
+    uploadedFile = req.file;
+  } else if (Array.isArray(req.files) && req.files.length > 0) {
+    uploadedFile =
+      req.files.find(f => f.fieldname === 'resume') ||
+      req.files.find(f => f.fieldname === 'file') ||
+      req.files[0];
+  } else if (req.files && typeof req.files === 'object') {
+    uploadedFile =
+      (req.files.resume && req.files.resume[0]) ||
+      (req.files.file && req.files.file[0]) ||
+      Object.values(req.files).flat()[0];
+  }
 
-  if (!uploadedFile) {
+  if (!uploadedFile || !uploadedFile.buffer) {
     return res.status(400).json({ message: 'No file uploaded. Please select a PDF file.' });
   }
 
@@ -137,6 +192,12 @@ export const uploadResume = async (req, res) => {
     (uploadedFile.originalname && uploadedFile.originalname.toLowerCase().endsWith('.pdf'));
   if (!isPdf) {
     return res.status(400).json({ message: 'Only PDF files are supported. Please upload a valid PDF.' });
+  }
+
+  // Validate size (5 MB max) — mirrors the frontend dropzone limit.
+  const MAX_SIZE = 5 * 1024 * 1024;
+  if (uploadedFile.size && uploadedFile.size > MAX_SIZE) {
+    return res.status(400).json({ message: 'File is too large. Maximum size is 5MB.' });
   }
 
   try {
@@ -156,6 +217,35 @@ export const uploadResume = async (req, res) => {
         message: 'Could not extract readable text from this PDF. Please ensure it is not an empty or image-only/scanned PDF.'
       });
     }
+
+    // 1. Persist the uploaded PDF to MongoDB GridFS (Primary Storage)
+    const ownerId = req.user?._id || req.user?.id || 'anonymous';
+    let gridFsResult = null;
+    try {
+      gridFsResult = await uploadToGridFS(uploadedFile.buffer, uploadedFile.originalname, {
+        userId: ownerId,
+        originalName: uploadedFile.originalname
+      });
+    } catch (gridErr) {
+      console.warn('[PDF Import] GridFS upload notice:', gridErr.message);
+    }
+
+    // 2. Persist to local disk as fallback (Dual Storage)
+    let storedFile = null;
+    try {
+      storedFile = persistUploadedPdf(uploadedFile.buffer, ownerId, uploadedFile.originalname);
+    } catch (storeErr) {
+      console.warn('Failed to persist uploaded PDF to disk:', storeErr.message);
+    }
+
+    const fileId = gridFsResult?.fileId || null;
+    const safeFilename = uploadedFile.originalname || 'resume.pdf';
+    const originalFile = {
+      filename: safeFilename,
+      fileId: fileId,
+      path: storedFile?.relPath || '',
+      size: uploadedFile.size || uploadedFile.buffer.length
+    };
 
     // Extract structured data from resume text using local extraction engine
     let analysis;
@@ -180,8 +270,13 @@ export const uploadResume = async (req, res) => {
 
     res.json({
       originalText: cleanedText,
-      filename: uploadedFile.originalname || 'resume.pdf',
-      size: uploadedFile.size || 0,
+      extractedText: cleanedText,
+      filename: originalFile.filename,
+      originalFilename: originalFile.filename,
+      size: originalFile.size,
+      fileId: fileId,
+      originalFile,
+      filePath: originalFile.path,
       extractedData: improvedResume,
       improvedResume
     });
@@ -192,31 +287,43 @@ export const uploadResume = async (req, res) => {
 };
 
 export const analyzeResume = async (req, res) => {
-  const { originalText, jobRole, filename, size } = req.body;
+  const { originalText, extractedText, jobRole, targetRole, filename, size, originalFile, fileId } = req.body;
 
-  if (!originalText || !jobRole) {
+  const chosenText = originalText || extractedText;
+  const chosenRole = jobRole || targetRole;
+
+  if (!chosenText || !chosenRole) {
     return res.status(400).json({ message: 'Original text and target job role are required' });
   }
 
   try {
     let analysis;
     try {
-      analysis = await analyzeResumeText(originalText, jobRole);
+      analysis = await analyzeResumeText(chosenText, chosenRole);
     } catch (aiErr) {
       console.warn('AI analysis failed, using local analyzer fallback:', aiErr.message);
-      analysis = analyzeResumeTextLocally(originalText, jobRole);
+      analysis = analyzeResumeTextLocally(chosenText, chosenRole);
     }
 
     const userId = req.user?._id || req.user?.id || new mongoose.Types.ObjectId();
+    const chosenFileId = fileId || originalFile?.fileId || null;
+    const chosenFilename = originalFile?.filename || filename || 'resume.pdf';
+
     const resumePayload = {
       userId,
+      fileId: chosenFileId,
+      filename: chosenFilename,
+      originalFilename: chosenFilename,
       originalFile: {
-        filename: filename || 'resume.pdf',
-        path: '',
-        size: size || originalText.length
+        filename: chosenFilename,
+        fileId: chosenFileId,
+        path: originalFile?.path || '',
+        size: originalFile?.size || size || chosenText.length
       },
-      originalText,
-      jobRole,
+      originalText: chosenText,
+      extractedText: chosenText,
+      jobRole: chosenRole,
+      targetRole: chosenRole,
       atsScore: analysis.atsScore || analysis.overallATS || 70,
       analysis,
       feedback: {
@@ -285,7 +392,10 @@ export const rewriteSection = async (req, res) => {
   }
 
   try {
-    const resume = await Resume.findById(resumeId);
+    if (!mongoose.isValidObjectId(resumeId)) {
+      return res.status(400).json({ message: 'Invalid resume ID' });
+    }
+    const resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
     if (!resume) {
       return res.status(404).json({ message: 'Resume not found' });
     }
@@ -326,7 +436,10 @@ export const rewriteEntire = async (req, res) => {
   }
 
   try {
-    const resume = await Resume.findById(resumeId);
+    if (!mongoose.isValidObjectId(resumeId)) {
+      return res.status(400).json({ message: 'Invalid resume ID' });
+    }
+    const resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
     if (!resume) {
       return res.status(404).json({ message: 'Resume not found' });
     }
@@ -357,8 +470,68 @@ export const rewriteEntire = async (req, res) => {
 
 export const getResumeHistory = async (req, res) => {
   try {
-    const resumes = await Resume.find({ userId: req.user._id }).sort({ createdAt: -1 });
+    const resumes = await Resume.find({ userId: req.user._id }).sort({ updatedAt: -1, createdAt: -1 });
     res.json(resumes);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Returns the most recently updated resume for the authenticated user (used by the builder).
+export const getLatestResume = async (req, res) => {
+  try {
+    const resume = await Resume.findOne({ userId: req.user._id }).sort({ updatedAt: -1, createdAt: -1 });
+    if (!resume) {
+      return res.status(404).json({ message: 'No resume found' });
+    }
+    res.json({ resume });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Streams the original uploaded PDF for a resume owned by the authenticated user (GridFS + disk fallback).
+export const getResumeFile = async (req, res) => {
+  try {
+    const resume = await Resume.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!resume) {
+      return res.status(404).json({ message: 'Resume not found or access denied' });
+    }
+
+    const downloadName = resume.originalFilename || resume.originalFile?.filename || 'resume.pdf';
+    const safeDownloadName = sanitizeFilename(downloadName);
+
+    // 1. GridFS Storage (Primary)
+    const fileId = resume.fileId || resume.originalFile?.fileId;
+    if (fileId) {
+      const exists = await checkGridFSFileExists(fileId);
+      if (exists) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${safeDownloadName}"`);
+        return downloadFromGridFS(fileId).pipe(res);
+      }
+    }
+
+    // 2. Local disk storage (Fallback)
+    if (resume.originalFile?.path) {
+      const absPath = resolveStoredPath(resume.originalFile.path);
+      if (absPath && fs.existsSync(absPath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${safeDownloadName}"`);
+        return fs.createReadStream(absPath).pipe(res);
+      }
+    }
+
+    // 3. Dynamic generation fallback
+    if (resume.improvedResume) {
+      const user = await User.findById(req.user._id).catch(() => null);
+      const pdfBuffer = generateResumePDF(resume.improvedResume, user, resume.selectedTemplate || 'classic');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${safeDownloadName}"`);
+      return res.send(pdfBuffer);
+    }
+
+    return res.status(404).json({ message: 'Original file is no longer available on the server' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -382,6 +555,145 @@ export const getResumeById = async (req, res) => {
   }
 };
 
+// Authenticated save endpoint supporting multipart file or JSON metadata
+export const saveResume = async (req, res) => {
+  try {
+    let uploadedBuffer = null;
+    let originalName = 'resume.pdf';
+    let uploadedFile = null;
+
+    if (req.file) {
+      uploadedFile = req.file;
+    } else if (Array.isArray(req.files) && req.files.length > 0) {
+      uploadedFile =
+        req.files.find(f => f.fieldname === 'resume') ||
+        req.files.find(f => f.fieldname === 'file') ||
+        req.files[0];
+    } else if (req.files && typeof req.files === 'object') {
+      uploadedFile =
+        (req.files.resume && req.files.resume[0]) ||
+        (req.files.file && req.files.file[0]) ||
+        Object.values(req.files).flat()[0];
+    }
+
+    if (uploadedFile && uploadedFile.buffer) {
+      uploadedBuffer = uploadedFile.buffer;
+      originalName = uploadedFile.originalname || 'resume.pdf';
+    }
+
+    const {
+      resumeId,
+      originalText,
+      extractedText,
+      jobRole,
+      targetRole,
+      atsScore,
+      improvedResume,
+      resumeData,
+      selectedTemplate,
+      analysis: bodyAnalysis,
+      feedback: bodyFeedback,
+      fileId: bodyFileId
+    } = req.body;
+
+    let fileId = bodyFileId;
+    let relPath = '';
+
+    if (uploadedBuffer) {
+      try {
+        const gridRes = await uploadToGridFS(uploadedBuffer, originalName, { userId: req.user._id });
+        fileId = gridRes.fileId;
+      } catch (gridErr) {
+        console.warn('[saveResume] GridFS notice:', gridErr.message);
+      }
+      try {
+        const diskRes = persistUploadedPdf(uploadedBuffer, req.user._id, originalName);
+        relPath = diskRes.relPath;
+      } catch (diskErr) {
+        console.warn('[saveResume] Disk notice:', diskErr.message);
+      }
+    }
+
+    let resume = null;
+    if (resumeId) {
+      if (!mongoose.isValidObjectId(resumeId)) {
+        return res.status(400).json({ message: 'Invalid resume ID' });
+      }
+      resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
+      if (!resume) {
+        return res.status(404).json({ message: 'Resume not found' });
+      }
+    }
+
+    const finalData = improvedResume || resumeData || (resume ? resume.improvedResume : {});
+    const finalRole = jobRole || targetRole || (resume ? resume.jobRole : 'Software Engineer');
+    const finalText = originalText || extractedText || (resume ? resume.originalText : 'Created via Resume Builder');
+    const finalScore = typeof atsScore === 'number' ? atsScore : (resume ? resume.atsScore : 75);
+
+    if (!resume) {
+      resume = new Resume({
+        userId: req.user._id,
+        fileId: fileId || null,
+        filename: originalName,
+        originalFilename: originalName,
+        originalFile: {
+          filename: originalName,
+          path: relPath,
+          size: uploadedBuffer ? uploadedBuffer.length : 0,
+          fileId: fileId || null
+        },
+        originalText: finalText,
+        extractedText: finalText,
+        jobRole: finalRole,
+        targetRole: finalRole,
+        atsScore: finalScore,
+        analysis: bodyAnalysis || {},
+        feedback: bodyFeedback || {},
+        improvedResume: finalData,
+        selectedTemplate: selectedTemplate || 'classic'
+      });
+    } else {
+      if (fileId) {
+        resume.fileId = fileId;
+        if (!resume.originalFile) resume.originalFile = {};
+        resume.originalFile.fileId = fileId;
+      }
+      if (relPath) {
+        if (!resume.originalFile) resume.originalFile = {};
+        resume.originalFile.path = relPath;
+      }
+      if (finalData) resume.improvedResume = finalData;
+      if (finalRole) {
+        resume.jobRole = finalRole;
+        resume.targetRole = finalRole;
+      }
+      if (finalText) {
+        resume.originalText = finalText;
+        resume.extractedText = finalText;
+      }
+      if (typeof atsScore === 'number') resume.atsScore = atsScore;
+      if (selectedTemplate) resume.selectedTemplate = selectedTemplate;
+      if (bodyAnalysis) resume.analysis = bodyAnalysis;
+      if (bodyFeedback) resume.feedback = bodyFeedback;
+    }
+
+    await resume.save();
+
+    const historyCount = await ResumeHistory.countDocuments({ resumeId: resume._id });
+    await ResumeHistory.create({
+      resumeId: resume._id,
+      versionNumber: historyCount + 1,
+      improvedResume: resume.improvedResume,
+      atsScore: resume.atsScore
+    });
+
+    return res.status(resumeId ? 200 : 201).json(resume);
+  } catch (err) {
+    console.error('Save Resume Error:', err);
+    return res.status(500).json({ message: err.message || 'Failed to save resume' });
+  }
+};
+
 export const deleteResume = async (req, res) => {
   try {
     const resume = await Resume.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
@@ -391,7 +703,25 @@ export const deleteResume = async (req, res) => {
 
     await ResumeHistory.deleteMany({ resumeId: req.params.id });
 
-    res.json({ message: 'Resume and history deleted successfully' });
+    // Delete from GridFS if present
+    const fileId = resume.fileId || resume.originalFile?.fileId;
+    if (fileId) {
+      await deleteFromGridFS(fileId);
+    }
+
+    // Best-effort removal of the stored PDF from local disk.
+    if (resume.originalFile?.path) {
+      try {
+        const absPath = resolveStoredPath(resume.originalFile.path);
+        if (absPath && fs.existsSync(absPath)) {
+          fs.unlinkSync(absPath);
+        }
+      } catch (fileErr) {
+        console.warn('Failed to delete stored PDF from disk:', fileErr.message);
+      }
+    }
+
+    res.json({ success: true, message: 'Resume and PDF deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -409,7 +739,7 @@ export const downloadResumePDF = async (req, res) => {
 
     if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
       try {
-        const resume = await Resume.findById(resumeId);
+        const resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
         if (resume) {
           resumeDataToExport = resumeDataToExport || resume.improvedResume;
           targetJobRole = resume.jobRole || targetJobRole;
@@ -441,29 +771,27 @@ export const downloadResumePDF = async (req, res) => {
 };
 
 export const updateResumeData = async (req, res) => {
-  const { resumeId, improvedResume, selectedTemplate, jobRole } = req.body;
+  const { resumeId, improvedResume, selectedTemplate, jobRole, atsScore } = req.body;
 
   try {
     let resume = null;
-    if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
-      try {
-        resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
-      } catch (findErr) {
-        console.warn('Resume findOne skipped:', findErr.message);
+    if (resumeId) {
+      if (!mongoose.isValidObjectId(resumeId)) {
+        return res.status(400).json({ message: 'Invalid resume ID' });
+      }
+      resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
+      if (!resume) {
+        return res.status(404).json({ message: 'Resume not found' });
       }
     }
 
     if (!resume) {
-      const validUserId = req.user && req.user._id && mongoose.isValidObjectId(req.user._id)
-        ? req.user._id
-        : new mongoose.Types.ObjectId();
-
       resume = new Resume({
-        userId: validUserId,
+        userId: req.user._id,
         originalFile: { filename: 'builder_resume.pdf', path: '', size: 0 },
         originalText: 'Created via Resume Builder',
         jobRole: jobRole || 'Software Engineer',
-        atsScore: 85,
+        atsScore: typeof atsScore === 'number' ? atsScore : 85,
         analysis: {},
         improvedResume: improvedResume || {},
         selectedTemplate: selectedTemplate || 'classic'
@@ -472,17 +800,26 @@ export const updateResumeData = async (req, res) => {
       if (improvedResume) resume.improvedResume = improvedResume;
       if (selectedTemplate) resume.selectedTemplate = selectedTemplate;
       if (jobRole) resume.jobRole = jobRole;
+      if (typeof atsScore === 'number') resume.atsScore = atsScore;
     }
 
     await resume.save();
 
-    const historyCount = await ResumeHistory.countDocuments({ resumeId: resume._id });
-    await ResumeHistory.create({
-      resumeId: resume._id,
-      versionNumber: historyCount + 1,
-      improvedResume: resume.improvedResume,
-      atsScore: resume.atsScore
-    });
+    // Only create a new revision when the content actually changed so that
+    // autosave does not generate revision spam.
+    const lastHistory = await ResumeHistory.findOne({ resumeId: resume._id }).sort({ versionNumber: -1 });
+    const currentJson = JSON.stringify(resume.improvedResume || {});
+    const lastJson = lastHistory ? JSON.stringify(lastHistory.improvedResume || {}) : null;
+
+    if (lastJson !== currentJson) {
+      const historyCount = await ResumeHistory.countDocuments({ resumeId: resume._id });
+      await ResumeHistory.create({
+        resumeId: resume._id,
+        versionNumber: historyCount + 1,
+        improvedResume: resume.improvedResume,
+        atsScore: resume.atsScore
+      });
+    }
 
     res.json(resume);
   } catch (error) {
@@ -507,7 +844,7 @@ export const performSectionAIAction = async (req, res) => {
 
     if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
       try {
-        const resume = await Resume.findById(resumeId);
+        const resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
         if (resume) {
           if (!jobRole) jobRole = resume.jobRole;
           const imp = resume.improvedResume || {};
@@ -557,7 +894,7 @@ export const downloadResumeDOCX = async (req, res) => {
 
     if (resumeId && typeof resumeId === 'string' && mongoose.isValidObjectId(resumeId)) {
       try {
-        const resume = await Resume.findById(resumeId);
+        const resume = await Resume.findOne({ _id: resumeId, userId: req.user._id });
         if (resume) {
           resumeDataToExport = resumeDataToExport || resume.improvedResume;
           targetJobRole = resume.jobRole || targetJobRole;

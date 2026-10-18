@@ -5,7 +5,10 @@ import {
   logoutUser,
   getMe,
   updateProfile,
-  refreshAccessToken
+  refreshAccessToken,
+  googleAuthRedirect,
+  googleAuthCallback,
+  getLoginLogs
 } from '../controllers/authController.js';
 import { protect } from '../middleware/auth.js';
 
@@ -17,5 +20,10 @@ router.post('/logout', logoutUser);
 router.post('/refresh', refreshAccessToken);
 router.get('/me', protect, getMe);
 router.put('/profile', protect, updateProfile);
+router.get('/logs', protect, getLoginLogs);
+
+// Google OAuth 2.0
+router.get('/google', googleAuthRedirect);
+router.get('/google/callback', googleAuthCallback);
 
 export default router;

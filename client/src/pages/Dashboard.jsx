@@ -29,7 +29,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import Loader from '../components/Loader';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserResumesFromSupabase } from '../services/supabaseResumeService';
+import { getApiBaseUrl } from '../services/api';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -57,30 +57,8 @@ const Dashboard = () => {
 
   const fetchHistory = async () => {
     try {
-      // Fetch from MongoDB
-      let mongoHistory = [];
-      try {
-        const { data } = await api.get('/resume/history');
-        mongoHistory = data || [];
-      } catch (err) {
-        console.warn('MongoDB history fetch failed:', err.message);
-      }
-      
-      // Fetch from Supabase
-      let supabaseHistory = [];
-      if (user) {
-        supabaseHistory = await fetchUserResumesFromSupabase(user);
-      }
-
-      // Combine and remove duplicates based on filename/time
-      const combined = [...supabaseHistory, ...mongoHistory].sort((a, b) => 
-        new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at)
-      );
-      
-      // Deduplicate by ID or filename
-      const unique = Array.from(new Map(combined.map(item => [item._id || item.filename, item])).values());
-      
-      setHistory(unique);
+      const { data } = await api.get('/resume/history');
+      setHistory(data || []);
     } catch (error) {
       console.error(error);
       toast.error('Failed to load analysis history.');
@@ -110,7 +88,8 @@ const Dashboard = () => {
         originalText: data.originalText,
         jobRole: finalRole,
         filename: data.filename || 'resume.pdf',
-        size: data.size || 0
+        size: data.size || 0,
+        originalFile: data.originalFile || null
       });
 
       setAnalysisResult(analysisData);
@@ -174,34 +153,29 @@ const Dashboard = () => {
   };
 
   const handleSelectHistoryItem = async (item) => {
-    if (item.isSupabase) {
-      if (item.extracted_data) {
-        localStorage.setItem('resumeroast_pending_import', JSON.stringify({
-          ...item.extracted_data,
-          filename: item.filename
-        }));
+    // Builder-created resumes open directly in the builder for editing.
+    if (item.originalText === 'Created via Resume Builder') {
+      navigate(`/builder/${item._id}`);
+      return;
+    }
+    try {
+      setAnalyzing(true);
+      const { data } = await api.get(`/resume/${item._id}`);
+      if (data?.resume) {
+        setAnalysisResult(data.resume);
+        setParsedData({
+          originalText: data.resume.originalText,
+          filename: data.resume.originalFile?.filename || item.originalFile?.filename,
+          size: data.resume.originalFile?.size || item.originalFile?.size,
+          extractedData: data.resume.improvedResume
+        });
+        setJobRole(data.resume.jobRole || 'Java Developer');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
-      navigate('/builder');
-    } else {
-      try {
-        setAnalyzing(true);
-        const { data } = await api.get(`/resume/${item._id}`);
-        if (data?.resume) {
-          setAnalysisResult(data.resume);
-          setParsedData({
-            originalText: data.resume.originalText,
-            filename: data.resume.originalFile?.filename || item.originalFile?.filename,
-            size: data.resume.originalFile?.size || item.originalFile?.size,
-            extractedData: data.resume.improvedResume
-          });
-          setJobRole(data.resume.jobRole || 'Java Developer');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-      } catch (e) {
-        navigate(`/analysis/${item._id}`);
-      } finally {
-        setAnalyzing(false);
-      }
+    } catch (e) {
+      navigate(`/analysis/${item._id}`);
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -234,8 +208,9 @@ const Dashboard = () => {
   const candidatePhone = contact.phone || '';
   const pdfUrl =
     parsedData?.localPdfUrl ||
-    analysisResult?.supabaseStorage?.file_url ||
-    analysisResult?.file_url ||
+    (analysisResult?._id && (analysisResult?.fileId || analysisResult?.originalFile?.fileId || analysisResult?.originalFile?.path)
+      ? `${getApiBaseUrl()}/resume/${analysisResult._id}/file`
+      : '') ||
     '';
   const atsScore = Number(analysisResult?.atsScore ?? analysisResult?.analysis?.overallATS ?? 70);
   const statusText =
@@ -677,12 +652,13 @@ const Dashboard = () => {
                         </div>
                       </div>
                       
-                      {item.isSupabase && item.file_url && (
+                      {(item.fileId || item.originalFile?.fileId || item.originalFile?.path) && (
                         <div className="mt-3 pt-3 border-t border-slate-800/50 flex justify-end">
                           <a 
-                            href={item.file_url} 
+                            href={`${getApiBaseUrl()}/resume/${item._id}/file`}
                             target="_blank" 
                             rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
                             className="text-xs text-brandPurple flex items-center hover:underline"
                           >
                             <ExternalLink className="w-3.5 h-3.5 mr-1" />

@@ -53,7 +53,6 @@ const ImportResumeModal = ({ isOpen, onClose, onImportSuccess, defaultJobRole = 
       // 1. Upload & Parse text from PDF
       const formData = new FormData();
       formData.append('resume', file);
-      formData.append('file', file);
 
       const uploadRes = await api.post('/resume/upload', formData);
 

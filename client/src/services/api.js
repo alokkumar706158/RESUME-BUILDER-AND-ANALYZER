@@ -1,7 +1,14 @@
 import axios from 'axios';
 
+// In development the Vite proxy forwards /api to the Express server.
+// In production set VITE_API_URL to the deployed backend origin.
+const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+export const API_BASE_URL = rawApiUrl ? `${rawApiUrl}/api` : '/api';
+
+export const getApiBaseUrl = () => API_BASE_URL;
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
@@ -42,7 +49,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthRoute) {
       originalRequest._retry = true;
       try {
-        await axios.post('/api/auth/refresh', {}, { withCredentials: true });
+        await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
         return api(originalRequest);
       } catch (refreshError) {
         console.warn('Session expired. Redirecting to login.');

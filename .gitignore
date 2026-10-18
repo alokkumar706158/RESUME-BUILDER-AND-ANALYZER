@@ -9,6 +9,10 @@ node_modules/
 dist/
 build/
 
+# Uploaded private resumes (local disk storage)
+server/uploads/
+uploads/
+
 # System and logs
 .DS_Store
 *.log
