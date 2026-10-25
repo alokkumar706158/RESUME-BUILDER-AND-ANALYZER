@@ -608,6 +608,26 @@ const Dashboard = () => {
           {/* Sidebar history log */}
           <div className="space-y-6">
             <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
+              <div className="create-resume-brush-wrap">
+                <button
+                  type="button"
+                  onClick={() => navigate('/builder/new')}
+                  aria-label="Create Resume"
+                  className="create-resume-brush flex w-full min-h-[58px] sm:min-h-[66px] items-center"
+                >
+                  <span className="relative z-10 grid w-full grid-cols-[auto_1fr_auto] items-center gap-2.5 sm:gap-4 px-4 sm:px-7 py-3.5 sm:py-4">
+                    <span className="flex items-center gap-3 sm:gap-4">
+                      <FileText className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0" strokeWidth={2} aria-hidden="true" />
+                      <span className="h-7 sm:h-8 w-px bg-white/70 flex-shrink-0" aria-hidden="true" />
+                    </span>
+                    <span className="text-center text-base sm:text-lg font-extrabold tracking-wide whitespace-nowrap">
+                      Create Resume
+                    </span>
+                    <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" strokeWidth={2.5} aria-hidden="true" />
+                  </span>
+                </button>
+              </div>
+
               <h3 className="text-lg font-bold text-white flex items-center space-x-2">
                 <FileText className="w-5 h-5 text-slate-400" />
                 <span>Recent Submissions</span>

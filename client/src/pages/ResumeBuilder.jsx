@@ -3228,7 +3228,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           <div className="flex-1 flex justify-center items-start overflow-auto p-2">
             <div 
               style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
-              className="transition-transform duration-200 shadow-2xl rounded-sm w-full"
+              className="resume-template-canvas transition-transform duration-200 shadow-2xl rounded-sm w-full"
             >
               {selectedTemplate === 'modern' ? (
                 <ModernATSTemplate data={resumeData} />
@@ -3300,13 +3300,15 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </button>
           </div>
           <div className="flex-1 overflow-y-auto pt-4">
-            {selectedTemplate === 'modern' ? (
-              <ModernATSTemplate data={resumeData} />
-            ) : selectedTemplate === 'recommended' ? (
-              <RecommendedATSTemplate data={resumeData} />
-            ) : (
-              <ClassicATSTemplate data={resumeData} />
-            )}
+            <div className="resume-template-canvas">
+              {selectedTemplate === 'modern' ? (
+                <ModernATSTemplate data={resumeData} />
+              ) : selectedTemplate === 'recommended' ? (
+                <RecommendedATSTemplate data={resumeData} />
+              ) : (
+                <ClassicATSTemplate data={resumeData} />
+              )}
+            </div>
           </div>
         </div>
       )}

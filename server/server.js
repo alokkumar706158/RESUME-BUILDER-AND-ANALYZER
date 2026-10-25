@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit';
 import connectDB from './config/db.js';
 import authRoutes from './routes/auth.js';
 import resumeRoutes from './routes/resume.js';
+import builderRoutes from './routes/builder.js';
 
 // Validate required environment variables at startup (without logging secrets)
 validateEnv();
@@ -70,6 +71,7 @@ app.get('/', (req, res) => {
 // Route mappings
 app.use('/api/auth', authRoutes);
 app.use('/api/resume', resumeRoutes);
+app.use('/api/builder', builderRoutes);
 
 // Error Handler
 app.use((err, req, res, next) => {

@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useAuth } from '../context/AuthContext';
-import { User, Shield, Lock, ExternalLink, Globe, GraduationCap } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
+import { User, Sun, Moon, GraduationCap } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const Profile = () => {
   const { user, updateProfile } = useAuth();
+  const { isLight, toggleTheme } = useTheme();
   const [updatingProfile, setUpdatingProfile] = useState(false);
-  const [updatingPassword, setUpdatingPassword] = useState(false);
 
   const { register: regProfile, handleSubmit: handleProfileSubmit } = useForm({
     defaultValues: {
@@ -19,8 +20,6 @@ const Profile = () => {
       github: user?.github || ''
     }
   });
-
-  const { register: regPassword, handleSubmit: handlePasswordSubmit, reset: resetPasswordForm } = useForm();
 
   const onProfileSubmit = async (data) => {
     setUpdatingProfile(true);
@@ -42,31 +41,12 @@ const Profile = () => {
     }
   };
 
-  const onPasswordSubmit = async (data) => {
-    if (data.password !== data.confirmPassword) {
-      toast.error('Passwords do not match.');
-      return;
-    }
-
-    setUpdatingPassword(true);
-    try {
-      await updateProfile({ password: data.password });
-      toast.success('Password updated successfully!');
-      resetPasswordForm();
-    } catch (error) {
-      console.error(error);
-      toast.error(error || 'Failed to change password.');
-    } finally {
-      setUpdatingPassword(false);
-    }
-  };
-
   return (
     <div className="space-y-8 text-left max-w-4xl mx-auto">
       <div>
         <h2 className="text-3xl font-extrabold text-white tracking-tight">Profile & Settings</h2>
         <p className="text-slate-400 text-sm mt-1">
-          Manage your personal details, academic metadata, and account security.
+          Manage your personal details, academic metadata, and appearance preferences.
         </p>
       </div>
 
@@ -165,43 +145,31 @@ const Profile = () => {
             </form>
           </div>
 
-          {/* Form 2: Change Password */}
-          <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-6">
-            <h3 className="text-lg font-bold text-white flex items-center space-x-2 border-b border-slate-850 pb-3">
-              <Shield className="w-5 h-5 text-brandPurple" />
-              <span>Change Password</span>
-            </h3>
-
-            <form onSubmit={handlePasswordSubmit(onPasswordSubmit)} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider">New Password</label>
-                  <input
-                    type="password"
-                    placeholder="••••••••"
-                    {...regPassword('password', { required: true, minLength: 6 })}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-850 focus:border-brandPurple focus:outline-none rounded-xl text-white transition-colors text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Confirm Password</label>
-                  <input
-                    type="password"
-                    placeholder="••••••••"
-                    {...regPassword('confirmPassword', { required: true })}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-850 focus:border-brandPurple focus:outline-none rounded-xl text-white transition-colors text-sm"
-                  />
-                </div>
+          {/* Appearance: White Mode toggle */}
+          <div className="glass-panel p-4 sm:p-5 rounded-2xl border border-slate-800 flex items-center justify-between gap-3 sm:gap-4">
+            <div className="flex items-center space-x-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-brandPurple/10 border border-brandPurple/20 text-brandPurple flex items-center justify-center flex-shrink-0">
+                {isLight ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </div>
+              <span className="text-sm sm:text-base font-semibold text-white truncate">White Mode</span>
+            </div>
 
-              <button
-                type="submit"
-                disabled={updatingPassword}
-                className="px-6 py-2.5 bg-slate-900 border border-slate-800 text-brandPurple font-semibold rounded-xl text-sm transition-all hover:border-slate-700 disabled:opacity-50"
-              >
-                {updatingPassword ? 'Updating...' : 'Update Password'}
-              </button>
-            </form>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isLight}
+              aria-label="Toggle White Mode"
+              onClick={toggleTheme}
+              className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full border transition-colors ${
+                isLight ? 'bg-brandPurple border-brandPurple' : 'bg-slate-800 border-slate-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                  isLight ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>
