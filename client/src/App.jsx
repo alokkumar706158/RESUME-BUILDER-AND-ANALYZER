@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -14,7 +14,6 @@ import ResumeAnalysis from './pages/ResumeAnalysis';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import ResumeBuilder from './pages/ResumeBuilder';
-import NewResumeBuilder from './pages/NewResumeBuilder';
 
 // Components
 import Navbar from './components/Navbar';
@@ -74,8 +73,8 @@ function App() {
             {/* Protected Routes */}
             <Route path="/dashboard" element={<ProtectedLayout><Dashboard /></ProtectedLayout>} />
             <Route path="/builder" element={<ProtectedLayout fullWidth><ResumeBuilder /></ProtectedLayout>} />
-            <Route path="/builder/new" element={<ProtectedLayout><NewResumeBuilder /></ProtectedLayout>} />
-            <Route path="/builder/new/:id" element={<ProtectedLayout><NewResumeBuilder /></ProtectedLayout>} />
+            <Route path="/builder/new" element={<ProtectedLayout fullWidth><ResumeBuilder isNewDraft={true} key="new-draft-builder" /></ProtectedLayout>} />
+            <Route path="/builder/new/:id" element={<ProtectedLayout fullWidth><ResumeBuilder /></ProtectedLayout>} />
             <Route path="/builder/:id" element={<ProtectedLayout fullWidth><ResumeBuilder /></ProtectedLayout>} />
             <Route path="/analysis/:id" element={<ProtectedLayout><ResumeAnalysis /></ProtectedLayout>} />
             <Route path="/history" element={<ProtectedLayout><History /></ProtectedLayout>} />

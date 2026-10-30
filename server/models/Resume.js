@@ -5,6 +5,7 @@ const resumeSchema = new mongoose.Schema({
   fileId: { type: mongoose.Schema.Types.ObjectId, ref: 'fs.files' },
   filename: { type: String },
   originalFilename: { type: String },
+  title: { type: String },
   originalFile: {
     filename: String,
     path: String,
@@ -36,101 +37,28 @@ const resumeSchema = new mongoose.Schema({
     finalRecommendation: { type: String, default: "" }
   },
   selectedTemplate: { type: String, default: 'classic' },
-  improvedResume: {
-    contactInfo: {
-      fullName: { type: String, default: "" },
-      phone: { type: String, default: "" },
-      email: { type: String, default: "" },
-      linkedin: { type: String, default: "" },
-      github: { type: String, default: "" },
-      portfolio: { type: String, default: "" },
-      address: { type: String, default: "" },
-      profilePhoto: { type: String, default: "" },
-      photoEnabled: { type: Boolean, default: false },
-      photoZoom: { type: Number, default: 1 },
-      photoCrop: { type: mongoose.Schema.Types.Mixed, default: { x: 0, y: 0 } },
-      photoRotation: { type: Number, default: 0 },
-      photoFrameStyle: { type: String, default: 'passport' },
-      photoSize: { type: Number, default: 76 },
-      customLinks: [{
-        heading: { type: String, default: "" },
-        url: { type: String, default: "" }
-      }]
-    },
-    summary: { type: String, default: "" },
-    skills: { type: mongoose.Schema.Types.Mixed, default: [] },
-    softSkills: { type: [String], default: [] },
-    technicalSkills: { type: [String], default: [] },
-    toolsAndTech: { type: [String], default: [] },
-    experience: [{
-      company: { type: String, default: "" },
-      role: { type: String, default: "" },
-      duration: { type: String, default: "" },
-      startDate: { type: String, default: "" },
-      endDate: { type: String, default: "" },
-      currentWorking: { type: Boolean, default: false },
-      location: { type: String, default: "" },
-      description: { type: [String], default: [] },
-      achievements: { type: String, default: "" }
-    }],
-    projects: [{
-      title: { type: String, default: "" },
-      techStack: { type: [String], default: [] },
-      description: { type: [String], default: [] },
-      link: { type: String, default: "" },
-      github: { type: String, default: "" },
-      liveDemo: { type: String, default: "" },
-      startDate: { type: String, default: "" },
-      endDate: { type: String, default: "" },
-      duration: { type: String, default: "" },
-      role: { type: String, default: "" },
-      features: { type: String, default: "" },
-      challenges: { type: String, default: "" },
-      achievements: { type: String, default: "" }
-    }],
-    education: [{
-      institution: { type: String, default: "" },
-      degree: { type: String, default: "" },
-      branch: { type: String, default: "" },
-      gpa: { type: String, default: "" },
-      startYear: { type: String, default: "" },
-      endYear: { type: String, default: "" },
-      duration: { type: String, default: "" },
-      location: { type: String, default: "" },
-      relevantCoursework: { type: [String], default: [] },
-      description: { type: [String], default: [] }
-    }],
-    achievements: [{
-      title: { type: String, default: "" },
-      organization: { type: String, default: "" },
-      date: { type: String, default: "" },
-      description: { type: String, default: "" }
-    }],
-    certifications: [{
-      name: { type: String, default: "" },
-      organization: { type: String, default: "" },
-      issueDate: { type: String, default: "" },
-      credentialId: { type: String, default: "" },
-      credentialUrl: { type: String, default: "" }
-    }],
-    links: [{
-      heading: { type: String, default: "" },
-      url: { type: String, default: "" }
-    }],
-    languages: [{
-      name: { type: String, default: "" },
-      proficiency: { type: String, default: "Advanced" },
-      rating: { type: Number, default: 5 }
-    }]
-  }
+  improvedResume: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { timestamps: true });
 
 resumeSchema.pre('save', function (next) {
+  if (this.title && !this.filename) {
+    this.filename = `${this.title.replace(/[^a-zA-Z0-9_\- ]/g, '')}.pdf`;
+  }
+  if (this.filename && !this.title) {
+    this.title = this.filename.replace(/\.pdf$/i, '');
+  }
   if (this.originalFile?.filename && !this.filename) {
     this.filename = this.originalFile.filename;
   }
   if (this.originalFile?.filename && !this.originalFilename) {
     this.originalFilename = this.originalFile.filename;
+  }
+  if (!this.title && this.originalFile?.filename) {
+    this.title = this.originalFile.filename.replace(/\.pdf$/i, '');
+  }
+  if (this.filename && !this.originalFile?.filename) {
+    if (!this.originalFile) this.originalFile = {};
+    this.originalFile.filename = this.filename;
   }
   if (this.originalFile?.fileId && !this.fileId) {
     this.fileId = this.originalFile.fileId;

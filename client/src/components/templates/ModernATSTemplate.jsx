@@ -17,7 +17,7 @@ const StarRating = ({ rating = 5 }) => {
 
 const ModernATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
-  const fullName = contact.fullName || 'ALOK KUMAR';
+  const fullName = contact.fullName?.trim() ? contact.fullName.trim() : 'YOUR NAME';
   const email = contact.email || '';
   const phone = contact.phone || '';
   const address = contact.address || '';

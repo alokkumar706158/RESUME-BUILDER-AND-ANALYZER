@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { 
   Sparkles, 
   Download, 
@@ -33,7 +33,8 @@ import {
   Sliders,
   PanelLeftClose,
   PanelLeftOpen,
-  RefreshCw
+  RefreshCw,
+  History
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -47,6 +48,11 @@ import ImportResumeModal from '../components/ImportResumeModal';
 import ImportCurationModal from '../components/ImportCurationModal';
 import { useAuth } from '../context/AuthContext';
 import { sanitizeContactInfo } from '../utils/linkSanitizer';
+import {
+  buildResumePngBaseName,
+  downloadResumePngPages,
+  exportResumeAsA4Pngs
+} from '../utils/resumeImageExporter';
 
 const TARGET_JOB_ROLES = [
   'Java Developer',
@@ -106,18 +112,182 @@ const ROLE_CERT_RECOMMENDATIONS = {
   ]
 };
 
-const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
+export const createBlankResumeData = () => ({
+  contactInfo: {
+    fullName: '',
+    phone: '',
+    email: '',
+    linkedin: '',
+    github: '',
+    portfolio: '',
+    address: '',
+    profilePhoto: '',
+    photoEnabled: false,
+    photoZoom: 1,
+    photoCrop: { x: 0, y: 0 },
+    photoRotation: 0,
+    photoFrameStyle: 'passport',
+    photoSize: 76,
+    customLinks: []
+  },
+  summary: '',
+  skills: [],
+  technicalSkills: [],
+  softSkills: [],
+  toolsAndTech: [],
+  experience: [],
+  projects: [],
+  education: [],
+  certifications: [],
+  achievements: [],
+  links: [],
+  languages: [
+    { name: 'English', proficiency: 'Advanced', rating: 5 },
+    { name: 'Hindi', proficiency: 'Native', rating: 5 }
+  ]
+});
+
+const DEFAULT_SAMPLE_RESUME = {
+  contactInfo: {
+    fullName: 'ALOK KUMAR',
+    phone: '+91 9304XXXXXX',
+    email: 'alok.dev@example.com',
+    linkedin: '',
+    github: '',
+    portfolio: '',
+    address: 'Bihar, India',
+    profilePhoto: '',
+    photoEnabled: false,
+    photoZoom: 1,
+    photoCrop: { x: 0, y: 0 },
+    photoRotation: 0,
+    photoFrameStyle: 'passport',
+    photoSize: 76,
+    customLinks: []
+  },
+  summary: 'Detail-oriented and results-driven Java Developer with 2+ years of hands-on experience in building scalable RESTful microservices, backend APIs, and web applications using Spring Boot, Hibernate, and modern cloud technologies.',
+  skills: [
+    { name: 'Java', rating: 5 },
+    { name: 'Spring Boot', rating: 5 },
+    { name: 'REST API', rating: 5 },
+    { name: 'Hibernate', rating: 4 },
+    { name: 'Microservices', rating: 4 },
+    { name: 'Docker', rating: 4 },
+    { name: 'MySQL', rating: 5 },
+    { name: 'MongoDB', rating: 4 }
+  ],
+  technicalSkills: ['Java 17', 'Spring Boot', 'Hibernate', 'RESTful APIs', 'Microservices', 'Docker', 'MySQL', 'MongoDB', 'JUnit 5', 'Git', 'Maven'],
+  softSkills: ['Problem Solving', 'Team Collaboration', 'Agile/Scrum', 'Clean Code'],
+  toolsAndTech: ['Docker', 'Git', 'IntelliJ IDEA', 'Postman', 'Maven', 'Swagger'],
+  experience: [
+    {
+      company: 'Innovate Tech Solutions',
+      role: 'Java Developer Intern',
+      location: 'Noida, India',
+      startDate: 'Jan 2024',
+      endDate: 'Jun 2024',
+      currentWorking: false,
+      duration: 'Jan 2024 - Jun 2024',
+      description: [
+        'Developed 12+ RESTful API endpoints using Spring Boot and Microservices architecture, reducing server response latency by 25%.',
+        'Integrated Spring Data JPA with MySQL database, optimizing complex SQL queries for faster data retrieval.',
+        'Wrote comprehensive unit and integration tests with JUnit 5 and Mockito, raising code test coverage from 60% to 88%.'
+      ],
+      achievements: 'Engineered high-throughput caching layer with Redis, boosting API response time by 40%.'
+    }
+  ],
+  projects: [
+    {
+      title: 'ResumeRoast AI Platform',
+      description: [
+        'Engineered full-stack AI Resume Analyzer & Builder with PDF parsing and Google Gemini AI scoring.',
+        'Built automated ATS compliance checker providing instant section-by-section actionable feedback.',
+        'Implemented single-click ATS-friendly PDF and DOCX export capabilities with custom templates.'
+      ],
+      techStack: ['Java', 'Spring Boot', 'React', 'Node.js', 'MongoDB', 'Tailwind CSS', 'Gemini AI'],
+      link: 'github.com/alokkumar/resumeroast',
+      github: 'github.com/alokkumar/resumeroast',
+      liveDemo: 'resumeroast.live',
+      startDate: 'Jan 2024',
+      endDate: 'Mar 2024',
+      duration: '3 Months',
+      role: 'Full Stack Engineer'
+    }
+  ],
+  education: [
+    {
+      institution: 'Lovely Professional University',
+      degree: 'B.Tech',
+      branch: 'Computer Science and Engineering',
+      startYear: '2021',
+      endYear: '2025',
+      duration: '2021 - 2025',
+      gpa: '8.45',
+      location: 'Punjab, India',
+      relevantCoursework: ['Data Structures & Algorithms', 'Database Management Systems', 'Object Oriented Programming', 'Operating Systems', 'Computer Networks'],
+      description: ['Top 5% student in CS department', 'Core Technical Lead at Coding Club']
+    }
+  ],
+  certifications: [
+    {
+      name: 'Oracle Certified Professional: Java SE 11 Developer',
+      organization: 'Oracle',
+      issueDate: '2023',
+      credentialId: 'OCP-9921',
+      credentialUrl: 'oracle.com/cert/ocp9921'
+    },
+    {
+      name: 'AWS Certified Cloud Practitioner',
+      organization: 'Amazon Web Services',
+      issueDate: '2024',
+      credentialId: 'AWS-8821',
+      credentialUrl: 'aws.amazon.com/verify/8821'
+    }
+  ],
+  achievements: [
+    {
+      title: 'Secured 1st Position in Campus Hackathon',
+      organization: 'TechFest 2024',
+      date: 'Feb 2024',
+      description: 'Secured 1st position among 40+ teams by developing an AI-powered resume analysis platform within 24 hours.'
+    },
+    {
+      title: 'Solved 350+ DSA Problems',
+      organization: 'LeetCode & CodeChef',
+      date: '2023 - 2024',
+      description: 'Achieved 4-star rating on CodeChef and solved 350+ algorithmic problems across LeetCode & CodeChef.'
+    }
+  ],
+  links: [],
+  languages: [
+    { name: 'English', proficiency: 'Advanced', rating: 5 },
+    { name: 'Hindi', proficiency: 'Native', rating: 5 }
+  ]
+};
+
+const ResumeBuilder = ({ resumeIdProp, isEmbedded = false, isNewDraft = false }) => {
   const { user } = useAuth();
   const { id: paramId } = useParams();
-  const id = resumeIdProp || paramId;
   const navigate = useNavigate();
-
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [loading, setLoading] = useState(true);
+  // Detect whether this is a brand new draft flow
+  const isNew = Boolean(
+    isNewDraft ||
+    paramId === 'new' ||
+    searchParams.get('new') === 'true' ||
+    (location && location.pathname && (location.pathname === '/builder/new' || location.pathname.startsWith('/builder/new/')))
+  );
+
+  const id = isNew ? null : (resumeIdProp || (paramId && paramId !== 'new' ? paramId : null));
+
+  const [loading, setLoading] = useState(isNew ? false : true);
   const [saving, setSaving] = useState(false);
+  const [exportingPng, setExportingPng] = useState(false);
   const [previewMobileModal, setPreviewMobileModal] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
+  const exportStageRef = React.useRef(null);
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
@@ -245,13 +415,22 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     toast.success('Preview panel width reset');
   };
 
-  const [resumeId, setResumeId] = useState(id || null);
-  const [jobRole, setJobRole] = useState('Java Developer');
+  const [resumeId, setResumeId] = useState(isNew ? null : (id || null));
+  const resumeIdRef = React.useRef(isNew ? null : (id || null));
+  const isSavingRef = React.useRef(false);
+  const inFlightSavePromise = React.useRef(null);
+  const [loadingLatest, setLoadingLatest] = useState(false);
+
+  useEffect(() => {
+    resumeIdRef.current = resumeId;
+  }, [resumeId]);
+
+  const [jobRole, setJobRole] = useState(isNew ? 'Software Engineer' : 'Java Developer');
   const [selectedTemplate, setSelectedTemplate] = useState('classic');
 
   // Score comparison tracking
-  const [previousScore, setPreviousScore] = useState(82);
-  const [atsScore, setAtsScore] = useState(88);
+  const [previousScore, setPreviousScore] = useState(isNew ? 0 : 82);
+  const [atsScore, setAtsScore] = useState(isNew ? 0 : 88);
 
   // Import Modal States
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -266,10 +445,15 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
         jobRole,
         lastUpdated: new Date().toISOString()
       };
-      const storageKey = `resumeroast_builder_${targetId || resumeId || id || 'draft'}`;
-      localStorage.setItem(storageKey, JSON.stringify(payloadToSave));
-      localStorage.setItem('resumeroast_builder_latest', JSON.stringify(payloadToSave));
-      localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
+      const activeId = targetId || resumeId || id;
+      if (activeId) {
+        localStorage.setItem(`resumeroast_builder_${activeId}`, JSON.stringify(payloadToSave));
+      }
+      // If it is not a fresh blank unsaved draft, update latest/draft
+      if (!isNew || resumeId) {
+        localStorage.setItem('resumeroast_builder_latest', JSON.stringify(payloadToSave));
+        localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
+      }
     } catch (e) {
       console.error('Failed to save to local storage:', e);
     }
@@ -372,123 +556,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   const [lastSummaryFingerprint, setLastSummaryFingerprint] = useState('');
 
   // Main Structured Resume State
-  const [resumeData, setResumeData] = useState({
-    contactInfo: {
-      fullName: 'ALOK KUMAR',
-      phone: '+91 9304XXXXXX',
-      email: 'alok.dev@example.com',
-      linkedin: '',
-      github: '',
-      portfolio: '',
-      address: 'Bihar, India',
-      profilePhoto: '',
-      photoEnabled: false,
-      photoZoom: 1,
-      photoCrop: { x: 0, y: 0 },
-      photoRotation: 0,
-      photoFrameStyle: 'passport',
-      photoSize: 76,
-      customLinks: []
-    },
-    summary: 'Detail-oriented and results-driven Java Developer with 2+ years of hands-on experience in building scalable RESTful microservices, backend APIs, and web applications using Spring Boot, Hibernate, and modern cloud technologies.',
-    skills: [
-      { name: 'Java', rating: 5 },
-      { name: 'Spring Boot', rating: 5 },
-      { name: 'REST API', rating: 5 },
-      { name: 'Hibernate', rating: 4 },
-      { name: 'Microservices', rating: 4 },
-      { name: 'Docker', rating: 4 },
-      { name: 'MySQL', rating: 5 },
-      { name: 'MongoDB', rating: 4 }
-    ],
-    technicalSkills: ['Java 17', 'Spring Boot', 'Hibernate', 'RESTful APIs', 'Microservices', 'Docker', 'MySQL', 'MongoDB', 'JUnit 5', 'Git', 'Maven'],
-    softSkills: ['Problem Solving', 'Team Collaboration', 'Agile/Scrum', 'Clean Code'],
-    toolsAndTech: ['Docker', 'Git', 'IntelliJ IDEA', 'Postman', 'Maven', 'Swagger'],
-    experience: [
-      {
-        company: 'Innovate Tech Solutions',
-        role: 'Java Developer Intern',
-        location: 'Noida, India',
-        startDate: 'Jan 2024',
-        endDate: 'Jun 2024',
-        currentWorking: false,
-        duration: 'Jan 2024 - Jun 2024',
-        description: [
-          'Developed 12+ RESTful API endpoints using Spring Boot and Microservices architecture, reducing server response latency by 25%.',
-          'Integrated Spring Data JPA with MySQL database, optimizing complex SQL queries for faster data retrieval.',
-          'Wrote comprehensive unit and integration tests with JUnit 5 and Mockito, raising code test coverage from 60% to 88%.'
-        ],
-        achievements: 'Engineered high-throughput caching layer with Redis, boosting API response time by 40%.'
-      }
-    ],
-    projects: [
-      {
-        title: 'ResumeRoast AI Platform',
-        description: [
-          'Engineered full-stack AI Resume Analyzer & Builder with PDF parsing and Google Gemini AI scoring.',
-          'Built automated ATS compliance checker providing instant section-by-section actionable feedback.',
-          'Implemented single-click ATS-friendly PDF and DOCX export capabilities with custom templates.'
-        ],
-        techStack: ['Java', 'Spring Boot', 'React', 'Node.js', 'MongoDB', 'Tailwind CSS', 'Gemini AI'],
-        link: 'github.com/alokkumar/resumeroast',
-        github: 'github.com/alokkumar/resumeroast',
-        liveDemo: 'resumeroast.live',
-        startDate: 'Jan 2024',
-        endDate: 'Mar 2024',
-        duration: '3 Months',
-        role: 'Full Stack Engineer'
-      }
-    ],
-    education: [
-      {
-        institution: 'Lovely Professional University',
-        degree: 'B.Tech',
-        branch: 'Computer Science and Engineering',
-        startYear: '2021',
-        endYear: '2025',
-        duration: '2021 - 2025',
-        gpa: '8.45',
-        location: 'Punjab, India',
-        relevantCoursework: ['Data Structures & Algorithms', 'Database Management Systems', 'Object Oriented Programming', 'Operating Systems', 'Computer Networks'],
-        description: ['Top 5% student in CS department', 'Core Technical Lead at Coding Club']
-      }
-    ],
-    certifications: [
-      {
-        name: 'Oracle Certified Professional: Java SE 11 Developer',
-        organization: 'Oracle',
-        issueDate: '2023',
-        credentialId: 'OCP-9921',
-        credentialUrl: 'oracle.com/cert/ocp9921'
-      },
-      {
-        name: 'AWS Certified Cloud Practitioner',
-        organization: 'Amazon Web Services',
-        issueDate: '2024',
-        credentialId: 'AWS-8821',
-        credentialUrl: 'aws.amazon.com/verify/8821'
-      }
-    ],
-    achievements: [
-      {
-        title: 'Secured 1st Position in Campus Hackathon',
-        organization: 'TechFest 2024',
-        date: 'Feb 2024',
-        description: 'Secured 1st position among 40+ teams by developing an AI-powered resume analysis platform within 24 hours.'
-      },
-      {
-        title: 'Solved 350+ DSA Problems',
-        organization: 'LeetCode & CodeChef',
-        date: '2023 - 2024',
-        description: 'Achieved 4-star rating on CodeChef and solved 350+ algorithmic problems across LeetCode & CodeChef.'
-      }
-    ],
-    links: [],
-    languages: [
-      { name: 'English', proficiency: 'Advanced', rating: 5 },
-      { name: 'Hindi', proficiency: 'Native', rating: 5 }
-    ]
-  });
+  const [resumeData, setResumeData] = useState(() => (isNew ? createBlankResumeData() : DEFAULT_SAMPLE_RESUME));
 
   // Steps definition (9 steps)
   const steps = [
@@ -526,11 +594,112 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
   // Fingerprints used to avoid redundant MongoDB autosaves and to skip
   // persisting the untouched default resume for brand new drafts.
-  const pristineResumeFingerprint = React.useRef(JSON.stringify(resumeData));
+  const pristineResumeFingerprint = React.useRef(JSON.stringify(isNew ? createBlankResumeData() : DEFAULT_SAMPLE_RESUME));
   const lastSavedFingerprint = React.useRef('');
+
+  const applyDbResume = (dbResume) => {
+    if (!dbResume) return false;
+    const dbId = dbResume._id;
+    setResumeId(dbId);
+    resumeIdRef.current = dbId;
+    if (dbResume.jobRole) setJobRole(dbResume.jobRole);
+    if (typeof dbResume.atsScore === 'number') setAtsScore(dbResume.atsScore);
+    if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
+
+    const base = createBlankResumeData();
+    const imp = dbResume.improvedResume || {};
+
+    const cleanLoaded = {
+      ...base,
+      ...imp,
+      contactInfo: sanitizeContactInfo({
+        ...base.contactInfo,
+        ...(imp.contactInfo || {})
+      }),
+      education: sanitizeEducationList(imp.education || []),
+      experience: Array.isArray(imp.experience) ? imp.experience : [],
+      projects: Array.isArray(imp.projects) ? imp.projects : [],
+      skills: Array.isArray(imp.skills) ? imp.skills : [],
+      technicalSkills: Array.isArray(imp.technicalSkills) ? imp.technicalSkills : [],
+      softSkills: Array.isArray(imp.softSkills) ? imp.softSkills : [],
+      toolsAndTech: Array.isArray(imp.toolsAndTech) ? imp.toolsAndTech : [],
+      certifications: Array.isArray(imp.certifications) ? imp.certifications : [],
+      achievements: Array.isArray(imp.achievements) ? imp.achievements : [],
+      links: Array.isArray(imp.links) ? imp.links : [],
+      languages: Array.isArray(imp.languages) && imp.languages.length > 0 ? imp.languages : base.languages,
+      summary: typeof imp.summary === 'string' ? imp.summary : ''
+    };
+
+    setResumeData(cleanLoaded);
+
+    const fingerprint = JSON.stringify({
+      resumeData: cleanLoaded,
+      selectedTemplate: dbResume.selectedTemplate || 'classic',
+      jobRole: dbResume.jobRole || 'Software Engineer'
+    });
+    lastSavedFingerprint.current = fingerprint;
+
+    try {
+      localStorage.setItem(`resumeroast_builder_${dbId}`, JSON.stringify({
+        ...cleanLoaded,
+        selectedTemplate: dbResume.selectedTemplate || 'classic',
+        jobRole: dbResume.jobRole || 'Software Engineer',
+        lastUpdated: new Date().toISOString()
+      }));
+      localStorage.setItem('resumeroast_builder_latest', JSON.stringify({
+        ...cleanLoaded,
+        resumeId: dbId,
+        selectedTemplate: dbResume.selectedTemplate || 'classic',
+        jobRole: dbResume.jobRole || 'Software Engineer',
+        lastUpdated: new Date().toISOString()
+      }));
+    } catch (err) {}
+
+    return true;
+  };
+
+  const handleOpenLastDraft = async () => {
+    if (!user) {
+      toast.error('Please log in to load your saved drafts');
+      return;
+    }
+    setLoadingLatest(true);
+    const toastId = toast.loading('Loading latest saved draft...');
+    try {
+      const res = await api.get('/resume/latest');
+      if (res.data?.resume) {
+        applyDbResume(res.data.resume);
+        const newId = res.data.resume._id;
+        window.history.replaceState(null, '', `/builder/${newId}`);
+        toast.success('Opened last saved draft!', { id: toastId });
+      } else {
+        toast.error('No saved resume draft found.', { id: toastId });
+      }
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        toast.error('No saved resume draft found.', { id: toastId });
+      } else {
+        toast.error('Failed to load draft: ' + (err.response?.data?.message || err.message), { id: toastId });
+      }
+    } finally {
+      setLoadingLatest(false);
+    }
+  };
 
   // Load from local storage or DB or pending import
   useEffect(() => {
+    // 1. Fresh Blank Resume Draft Mode
+    if (isNew) {
+      setResumeId(null);
+      resumeIdRef.current = null;
+      setResumeData(createBlankResumeData());
+      setJobRole('Software Engineer');
+      setAtsScore(0);
+      setLoading(false);
+      pristineResumeFingerprint.current = JSON.stringify(createBlankResumeData());
+      return;
+    }
+
     // Check if there is a pending import from PDF upload
     const pending = localStorage.getItem('resumeroast_pending_import');
     if (pending) {
@@ -547,35 +716,33 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
       }
     }
 
-    const primaryKey = `resumeroast_builder_${id || 'draft'}`;
-    const savedLocal =
-      localStorage.getItem(primaryKey) ||
-      localStorage.getItem('resumeroast_builder_latest') ||
-      localStorage.getItem('resumeroast_builder_draft');
+    if (id) {
+      const primaryKey = `resumeroast_builder_${id}`;
+      const savedLocal = localStorage.getItem(primaryKey);
+      if (savedLocal) {
+        try {
+          const parsed = JSON.parse(savedLocal);
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.selectedTemplate) setSelectedTemplate(parsed.selectedTemplate);
+            if (parsed.jobRole) setJobRole(parsed.jobRole);
 
-    if (savedLocal) {
-      try {
-        const parsed = JSON.parse(savedLocal);
-        if (parsed && typeof parsed === 'object') {
-          if (parsed.selectedTemplate) setSelectedTemplate(parsed.selectedTemplate);
-          if (parsed.jobRole) setJobRole(parsed.jobRole);
-
-          setResumeData(prev => ({
-            ...prev,
-            ...parsed,
-            contactInfo: sanitizeContactInfo(parsed.contactInfo || prev.contactInfo),
-            education: sanitizeEducationList(parsed.education || prev.education)
-          }));
+            setResumeData(prev => ({
+              ...createBlankResumeData(),
+              ...parsed,
+              contactInfo: sanitizeContactInfo(parsed.contactInfo || {}),
+              education: sanitizeEducationList(parsed.education || [])
+            }));
+          }
+        } catch (e) {
+          console.error('LocalStorage parse error:', e);
         }
-      } catch (e) {
-        console.error('LocalStorage parse error:', e);
       }
     }
 
     fetchResumeFromDB();
-  }, [id, user]);
+  }, [id, user, isNew, location.pathname]);
 
-  // AUTOMATIC REAL-TIME AUTO-SAVE: Every change automatically persists to localStorage (and DB if resumeId exists)
+  // AUTOMATIC REAL-TIME AUTO-SAVE: Every change automatically persists to localStorage
   useEffect(() => {
     if (loading || !resumeData) return;
 
@@ -583,6 +750,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
     const saveTimer = setTimeout(() => {
       try {
+        const activeId = resumeIdRef.current || resumeId || id;
         const payloadToSave = {
           ...resumeData,
           selectedTemplate,
@@ -590,10 +758,13 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           lastUpdated: new Date().toISOString()
         };
 
-        const primaryKey = `resumeroast_builder_${resumeId || id || 'draft'}`;
-        localStorage.setItem(primaryKey, JSON.stringify(payloadToSave));
-        localStorage.setItem('resumeroast_builder_latest', JSON.stringify(payloadToSave));
-        localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
+        if (activeId) {
+          localStorage.setItem(`resumeroast_builder_${activeId}`, JSON.stringify(payloadToSave));
+        }
+        if (!isNew || activeId) {
+          localStorage.setItem('resumeroast_builder_latest', JSON.stringify({ ...payloadToSave, resumeId: activeId }));
+          localStorage.setItem('resumeroast_builder_draft', JSON.stringify(payloadToSave));
+        }
 
         setAutoSaveStatus('saved');
       } catch (err) {
@@ -603,15 +774,17 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     }, 300);
 
     return () => clearTimeout(saveTimer);
-  }, [resumeData, selectedTemplate, jobRole, resumeId, id, loading]);
+  }, [resumeData, selectedTemplate, jobRole, resumeId, id, loading, isNew]);
 
   // AUTOSAVE TO MONGODB: Debounced persistence of the full resume to the backend.
   // Skips the untouched default draft so brand new users don't create empty records.
   useEffect(() => {
-    if (loading || !user?.id || !resumeData) return;
+    if (loading || (!user?.id && !user?._id) || !resumeData) return;
 
+    const currentResumeId = resumeIdRef.current || resumeId;
     const fingerprint = JSON.stringify({ resumeData, selectedTemplate, jobRole });
-    if (!resumeId && JSON.stringify(resumeData) === pristineResumeFingerprint.current) {
+
+    if (!currentResumeId && JSON.stringify(resumeData) === pristineResumeFingerprint.current) {
       return;
     }
     if (fingerprint === lastSavedFingerprint.current) {
@@ -620,50 +793,51 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
 
     setAutoSaveStatus('saving');
     const timer = setTimeout(async () => {
+      if (isSavingRef.current) return;
+
       try {
+        const activeId = resumeIdRef.current || resumeId;
+        const candidateName = (resumeData.contactInfo?.fullName || '').trim();
+        const role = jobRole || 'Software Engineer';
+        const resumeTitle = candidateName ? `${candidateName} - ${role}` : `${role} Resume`;
+
         const res = await api.put('/resume/update', {
-          resumeId,
+          resumeId: activeId,
+          title: resumeTitle,
           improvedResume: resumeData,
           selectedTemplate,
-          jobRole,
+          jobRole: role,
           atsScore
         });
+
         if (res.data?._id) {
-          setResumeId(prev => prev || res.data._id);
+          const newId = res.data._id;
+          setResumeId(newId);
+          resumeIdRef.current = newId;
           lastSavedFingerprint.current = fingerprint;
+          if (!id || isNew) {
+            window.history.replaceState(null, '', `/builder/${newId}`);
+          }
         }
       } catch (err) {
-        console.warn('Auto-save to MongoDB failed:', err?.message);
+        console.warn('Auto-save to MongoDB notice:', err?.message);
       } finally {
         setAutoSaveStatus('saved');
       }
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [resumeData, selectedTemplate, jobRole, resumeId, loading, user]);
+  }, [resumeData, selectedTemplate, jobRole, resumeId, loading, user, isNew, id]);
 
   const fetchResumeFromDB = async () => {
+    if (isNew) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
 
-      const applyDbResume = (dbResume) => {
-        if (!dbResume) return false;
-        setResumeId(dbResume._id);
-        if (dbResume.jobRole) setJobRole(dbResume.jobRole);
-        if (dbResume.atsScore) setAtsScore(dbResume.atsScore);
-        if (dbResume.selectedTemplate) setSelectedTemplate(dbResume.selectedTemplate);
-        if (dbResume.improvedResume) {
-          setResumeData(prev => ({
-            ...prev,
-            ...dbResume.improvedResume,
-            contactInfo: sanitizeContactInfo(dbResume.improvedResume.contactInfo || prev.contactInfo),
-            education: sanitizeEducationList(dbResume.improvedResume.education || prev.education)
-          }));
-        }
-        return true;
-      };
-
-      if (user && user.id) {
+      if (user && (user.id || user._id)) {
         // 1. Load a specific resume when an id is present in the route.
         if (id) {
           try {
@@ -680,11 +854,14 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           try {
             const res = await api.get('/resume/latest');
             if (applyDbResume(res.data?.resume)) {
+              const latestId = res.data?.resume?._id;
+              if (latestId) {
+                window.history.replaceState(null, '', `/builder/${latestId}`);
+              }
               setLoading(false);
               return;
             }
           } catch (err) {
-            // 404 simply means the user has no saved resume yet.
             if (err?.response?.status !== 404) {
               console.warn('Failed to load latest resume:', err?.message);
             }
@@ -699,50 +876,72 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
   };
 
   const handleSaveSection = async (showToast = true) => {
+    if (inFlightSavePromise.current) {
+      try {
+        await inFlightSavePromise.current;
+      } catch {}
+    }
+
     try {
       setSaving(true);
+      isSavingRef.current = true;
       saveToLocalStorage(resumeData);
 
       let savedToCloud = false;
 
       // Persist to MongoDB via the Express API.
-      if (user && user.id) {
-        try {
-          const payload = {
-            resumeId,
-            improvedResume: resumeData,
-            selectedTemplate,
-            jobRole,
-            atsScore
-          };
+      if (user && (user.id || user._id)) {
+        const candidateName = (resumeData.contactInfo?.fullName || '').trim();
+        const role = jobRole || 'Software Engineer';
+        const resumeTitle = candidateName ? `${candidateName} - ${role}` : `${role} Resume`;
+
+        const payload = {
+          resumeId: resumeIdRef.current || resumeId,
+          title: resumeTitle,
+          improvedResume: resumeData,
+          selectedTemplate,
+          jobRole: role,
+          atsScore
+        };
+
+        const saveAction = (async () => {
           const res = await api.put('/resume/update', payload);
           if (res.data && res.data._id) {
-            setResumeId(res.data._id);
-            if (!id) {
-              window.history.replaceState(null, '', `/builder/${res.data._id}`);
+            const newId = res.data._id;
+            setResumeId(newId);
+            resumeIdRef.current = newId;
+            const fp = JSON.stringify({ resumeData, selectedTemplate, jobRole: role });
+            lastSavedFingerprint.current = fp;
+
+            if (!id || isNew) {
+              window.history.replaceState(null, '', `/builder/${newId}`);
             }
           }
-          savedToCloud = true;
-        } catch (apiErr) {
-          console.error('MongoDB save error:', apiErr);
-        }
+          return res;
+        })();
+
+        inFlightSavePromise.current = saveAction;
+        await saveAction;
+        savedToCloud = true;
       }
 
       if (savedToCloud) {
         if (showToast) {
-          toast.success('Saved successfully!', { id: 'save-toast' });
+          toast.success('Resume saved successfully!', { id: 'save-toast' });
         }
       } else {
         if (showToast) {
-          toast.error('Saved locally');
+          toast.success('Saved to local storage');
         }
       }
     } catch (err) {
       console.error('Save error:', err);
       if (showToast) {
-        toast.error('Saved locally');
+        toast.error(err.response?.data?.message || 'Failed to save resume. Changes saved locally.');
       }
     } finally {
+      inFlightSavePromise.current = null;
+      isSavingRef.current = false;
       setSaving(false);
     }
   };
@@ -988,53 +1187,38 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
     toast.success('AI suggestion applied!');
   };
 
-  // PDF Export
-  const handleDownloadPDF = async () => {
-    try {
-      await handleSaveSection(false);
-      toast.loading('Generating PDF...', { id: 'pdf-toast' });
-      const response = await api.post(
-        '/resume/download',
-        { resumeId, selectedTemplate, jobRole, improvedResume: resumeData },
-        { responseType: 'blob' }
-      );
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `Resume_${jobRole.replace(/\s+/g, '_')}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      toast.success('PDF Downloaded!', { id: 'pdf-toast' });
-    } catch (error) {
-      toast.error('Failed to download PDF', { id: 'pdf-toast' });
-    }
-  };
+  const handleDownloadPNG = async () => {
+    if (exportingPng) return;
 
-  // DOCX Export
-  const handleDownloadDOCX = async () => {
+    setExportingPng(true);
+    const toastId = 'png-export-toast';
+
     try {
+      toast.loading('Saving latest resume...', { id: toastId });
       await handleSaveSection(false);
-      toast.loading('Generating DOCX...', { id: 'docx-toast' });
-      const response = await api.post(
-        '/resume/download-docx',
-        { resumeId, selectedTemplate, improvedResume: resumeData },
-        { responseType: 'blob' }
-      );
-      const blob = new Blob([response.data], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
       });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `Resume_${jobRole.replace(/\s+/g, '_')}.docx`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      toast.success('DOCX Downloaded!', { id: 'docx-toast' });
+
+      const template = exportStageRef.current?.firstElementChild;
+      const { blobs, pageCount } = await exportResumeAsA4Pngs(template, {
+        onPageStart: ({ page, total }) => {
+          toast.loading(`Rendering A4 page ${page} of ${total}...`, { id: toastId });
+        }
+      });
+
+      downloadResumePngPages(blobs, buildResumePngBaseName(jobRole));
+      toast.success(
+        pageCount > 1
+          ? `${pageCount} high-resolution A4 PNG pages downloaded!`
+          : 'High-resolution A4 PNG downloaded!',
+        { id: toastId }
+      );
     } catch (error) {
-      toast.error('Failed to download DOCX', { id: 'docx-toast' });
+      console.error('PNG export failed:', error);
+      toast.error('Failed to download resume image. Please try again.', { id: toastId });
+    } finally {
+      setExportingPng(false);
     }
   };
 
@@ -1163,6 +1347,17 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
           <div className="flex items-center space-x-1 sm:space-x-1.5 flex-shrink-0">
             <button
               type="button"
+              onClick={handleOpenLastDraft}
+              disabled={loadingLatest || saving}
+              title="Open your most recently saved draft from MongoDB"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] sm:text-xs font-semibold px-2 sm:px-2.5 py-1 rounded-lg flex items-center space-x-1 transition shadow-sm"
+            >
+              <History className={`w-3.5 h-3.5 text-orange-400 ${loadingLatest ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">{loadingLatest ? 'Loading...' : 'Open Last Draft'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setImportModalOpen(true)}
               title="Import a new PDF resume or JSON backup file"
               className="bg-slate-800 hover:bg-slate-700 text-orange-400 border border-orange-500/30 text-[11px] sm:text-xs font-semibold px-2 sm:px-2.5 py-1 rounded-lg flex items-center space-x-1 transition shadow-sm"
@@ -1191,21 +1386,13 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             </button>
 
             <button
-              onClick={handleDownloadPDF}
-              title="Download ATS-Optimized PDF File"
-              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-bold text-[11px] sm:text-xs px-2.5 sm:px-3 py-1 rounded-lg flex items-center space-x-1 shadow-md transition"
+              onClick={handleDownloadPNG}
+              disabled={exportingPng}
+              title="Download High-Resolution A4 Resume Image (PNG)"
+              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-60 disabled:cursor-wait text-slate-950 font-bold text-[11px] sm:text-xs px-2.5 sm:px-3 py-1 rounded-lg flex items-center space-x-1 shadow-md transition"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>PDF</span>
-            </button>
-
-            <button
-              onClick={handleDownloadDOCX}
-              title="Download Editable Word DOCX File"
-              className="bg-slate-800 hover:bg-slate-700 text-blue-400 border border-blue-500/30 font-semibold text-[11px] sm:text-xs px-2 sm:px-2.5 py-1 rounded-lg flex items-center space-x-1 transition"
-            >
-              <FileText className="w-3.5 h-3.5 text-blue-400" />
-              <span className="hidden sm:inline">DOCX</span>
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>{exportingPng ? 'Rendering...' : 'PNG'}</span>
             </button>
           </div>
         </div>
@@ -1989,6 +2176,38 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   <span>Add Experience</span>
                 </button>
               </div>
+
+              {(!resumeData.experience || resumeData.experience.length === 0) && (
+                <div className="text-center py-10 bg-slate-900/40 rounded-2xl border border-dashed border-slate-800 space-y-3">
+                  <Briefcase className="w-10 h-10 text-slate-600 mx-auto opacity-50" />
+                  <p className="text-xs text-slate-400">No work experience entries added yet.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResumeData(prev => ({
+                        ...prev,
+                        experience: [
+                          {
+                            company: '',
+                            role: '',
+                            location: '',
+                            startDate: '',
+                            endDate: '',
+                            currentWorking: false,
+                            duration: '',
+                            description: [''],
+                            achievements: ''
+                          }
+                        ]
+                      }));
+                    }}
+                    className="bg-slate-800 hover:bg-slate-700 text-orange-400 border border-orange-500/30 text-xs font-semibold px-3 py-1.5 rounded-lg inline-flex items-center space-x-1 transition cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add First Experience</span>
+                  </button>
+                </div>
+              )}
 
               {(resumeData.experience || []).map((exp, expIdx) => (
                 <div key={expIdx} className="bg-slate-900/70 border border-slate-800 p-4 rounded-xl space-y-3">
@@ -2972,7 +3191,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                   <FileCheck className="w-5 h-5 text-emerald-400" />
                   <span>Finalize & Export Resume</span>
                 </h2>
-                <p className="text-xs text-slate-400 mt-1">Review ATS score comparison, completion checklist, and download exports.</p>
+                <p className="text-xs text-slate-400 mt-1">Review your ATS score and download a high-resolution A4 image of the live resume preview.</p>
               </div>
 
               {/* Score Dashboard */}
@@ -3041,25 +3260,22 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
                 </div>
               </div>
 
-              {/* Export Buttons */}
+              {/* Export Options */}
               <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl space-y-3">
                 <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Export Options</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <button
-                    onClick={handleDownloadPDF}
-                    className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-lg transition"
+                    onClick={handleDownloadPNG}
+                    disabled={exportingPng}
+                    className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-60 disabled:cursor-wait text-slate-950 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-lg transition"
                   >
                     <Download className="w-4 h-4" />
-                    <span>Download ATS PDF</span>
+                    <span>{exportingPng ? 'Rendering A4 PNG...' : 'Download as Image (PNG)'}</span>
                   </button>
 
-                  <button
-                    onClick={handleDownloadDOCX}
-                    className="bg-slate-800 hover:bg-slate-700 text-blue-400 border border-blue-500/40 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 transition"
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span>Download DOCX File</span>
-                  </button>
+                  <p className="text-[11px] text-slate-400 leading-relaxed text-center">
+                    High-resolution A4 pages (300 DPI). Resumes longer than one page download as separate numbered PNG files.
+                  </p>
                 </div>
               </div>
             </div>
@@ -3287,6 +3503,22 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
         </div>
       )}
 
+      {/* OFFSCREEN EXPORT STAGE */}
+      <div
+        ref={exportStageRef}
+        aria-hidden="true"
+        className="resume-template-canvas fixed top-0 w-[800px] bg-white pointer-events-none"
+        style={{ left: '-10000px', zIndex: -1 }}
+      >
+        {selectedTemplate === 'modern' ? (
+          <ModernATSTemplate data={resumeData} />
+        ) : selectedTemplate === 'recommended' ? (
+          <RecommendedATSTemplate data={resumeData} />
+        ) : (
+          <ClassicATSTemplate data={resumeData} />
+        )}
+      </div>
+
       {/* MOBILE PREVIEW MODAL */}
       {previewMobileModal && (
         <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col p-4">
@@ -3350,7 +3582,7 @@ const ResumeBuilder = ({ resumeIdProp, isEmbedded = false }) => {
             <div>
               <h4 className="text-sm font-bold text-white">Remove profile photo?</h4>
               <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                This will remove the photo from your live preview and exported PDF.
+                This will remove the photo from your live preview and exported image.
               </p>
             </div>
             <div className="flex items-center justify-center space-x-2 pt-2">

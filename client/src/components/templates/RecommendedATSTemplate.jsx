@@ -4,7 +4,7 @@ import { getCleanContactLinks } from '../../utils/linkSanitizer';
 
 const RecommendedATSTemplate = ({ data = {} }) => {
   const contact = data.contactInfo || {};
-  const fullName = contact.fullName || 'Alok Kumar';
+  const fullName = contact.fullName?.trim() ? contact.fullName.trim() : 'Your Name';
   const email = contact.email || '';
   const phone = contact.phone || '';
   const address = contact.address || '';

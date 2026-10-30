@@ -5,7 +5,6 @@ import {
   History, 
   User, 
   Flame, 
-  Home, 
   FileEdit, 
   ChevronLeft, 
   ChevronRight 
@@ -59,7 +58,6 @@ const Sidebar = () => {
     { name: 'Resume Builder', path: '/builder', icon: FileEdit },
     { name: 'My Resumes', path: '/history', icon: History },
     { name: 'Profile & Settings', path: '/profile', icon: User },
-    { name: 'Landing Page', path: '/', icon: Home },
   ];
 
   return (

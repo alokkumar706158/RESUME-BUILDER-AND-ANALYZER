@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Flame, 
@@ -22,6 +22,14 @@ import toast from 'react-hot-toast';
 import Loader from '../components/Loader';
 import ATSGauge from '../components/ATSGauge';
 import ResumeBuilder from './ResumeBuilder';
+import ClassicATSTemplate from '../components/templates/ClassicATSTemplate';
+import ModernATSTemplate from '../components/templates/ModernATSTemplate';
+import RecommendedATSTemplate from '../components/templates/RecommendedATSTemplate';
+import {
+  buildResumePngBaseName,
+  downloadResumePngPages,
+  exportResumeAsA4Pngs
+} from '../utils/resumeImageExporter';
 import {
   ResponsiveContainer,
   RadarChart,
@@ -80,6 +88,8 @@ const ResumeAnalysis = () => {
 
   // Template State
   const [selectedTemplate, setSelectedTemplate] = useState('classic');
+  const [exportingPng, setExportingPng] = useState(false);
+  const exportStageRef = useRef(null);
 
   const fetchResumeDetails = async () => {
     try {
@@ -99,25 +109,41 @@ const ResumeAnalysis = () => {
     fetchResumeDetails();
   }, [id]);
 
-  const handleDownload = async () => {
-    const toastId = toast.loading('Compiling PDF...');
+  const handleDownloadImage = async () => {
+    if (exportingPng) return;
+
+    setExportingPng(true);
+    const toastId = 'analysis-png-toast';
+
     try {
-      const response = await api.post('/resume/download', {
+      toast.loading('Saving latest resume...', { id: toastId });
+      await api.put('/resume/update', {
         resumeId: id,
-        template: selectedTemplate
-      }, {
-        responseType: 'blob'
+        improvedResume: resume.improvedResume
+      });
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
       });
 
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const link = document.createElement('a');
-      link.href = window.URL.createObjectURL(blob);
-      link.download = `ResumeRoast_${resume.jobRole.replace(/\s+/g, '_')}.pdf`;
-      link.click();
-      toast.success('Resume downloaded!', { id: toastId });
-    } catch (err) {
-      console.error(err);
-      toast.error('Failed to compile PDF resume.', { id: toastId });
+      const template = exportStageRef.current?.firstElementChild;
+      const { blobs, pageCount } = await exportResumeAsA4Pngs(template, {
+        onPageStart: ({ page, total }) => {
+          toast.loading(`Rendering A4 page ${page} of ${total}...`, { id: toastId });
+        }
+      });
+
+      downloadResumePngPages(blobs, buildResumePngBaseName(resume.jobRole));
+      toast.success(
+        pageCount > 1
+          ? `${pageCount} high-resolution A4 PNG pages downloaded!`
+          : 'High-resolution A4 PNG downloaded!',
+        { id: toastId }
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to download resume image.', { id: toastId });
+    } finally {
+      setExportingPng(false);
     }
   };
 
@@ -318,7 +344,7 @@ const ResumeAnalysis = () => {
           { id: 'roast', label: 'Review & Roast', icon: Flame },
           { id: 'keywords', label: 'Missing Keywords', icon: AlertTriangle },
           { id: 'editor', label: 'Resume Editor', icon: Edit },
-          { id: 'download', label: 'Export PDF', icon: Download }
+          { id: 'download', label: 'Export Image', icon: Download }
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -554,8 +580,8 @@ const ResumeAnalysis = () => {
       {activeTab === 'download' && (
         <div className="max-w-xl mx-auto glass-panel p-8 rounded-2xl border border-slate-800 space-y-8 text-center">
           <div className="space-y-2">
-            <h3 className="text-2xl font-extrabold text-white">Generate Improved Resume PDF</h3>
-            <p className="text-slate-400 text-sm">Select your styling template, review final details, and download.</p>
+            <h3 className="text-2xl font-extrabold text-white">Download Resume as A4 Image</h3>
+            <p className="text-slate-400 text-sm">Select your template and download high-resolution PNG pages of the complete resume.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
@@ -579,15 +605,36 @@ const ResumeAnalysis = () => {
             ))}
           </div>
 
-          <button
-            onClick={handleDownload}
-            className="w-full py-3.5 bg-gradient-to-r from-brandPurple to-brandBlue hover:opacity-95 text-white font-semibold rounded-xl shadow-lg shadow-brandPurple/20 transition-all flex items-center justify-center space-x-2"
-          >
-            <Download className="w-5 h-5" />
-            <span>Download PDF Resume</span>
-          </button>
+          <div className="space-y-3">
+            <button
+              onClick={handleDownloadImage}
+              disabled={exportingPng}
+              className="w-full py-3.5 bg-gradient-to-r from-brandPurple to-brandBlue hover:opacity-95 disabled:opacity-60 disabled:cursor-wait text-white font-semibold rounded-xl shadow-lg shadow-brandPurple/20 transition-all flex items-center justify-center space-x-2"
+            >
+              <Download className="w-5 h-5" />
+              <span>{exportingPng ? 'Rendering A4 PNG...' : 'Download as Image (PNG)'}</span>
+            </button>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              High-resolution A4 pages (300 DPI). Resumes longer than one page download as separate numbered PNG files.
+            </p>
+          </div>
         </div>
       )}
+
+      <div
+        ref={exportStageRef}
+        aria-hidden="true"
+        className="resume-template-canvas fixed top-0 w-[800px] bg-white pointer-events-none"
+        style={{ left: '-10000px', zIndex: -1 }}
+      >
+        {selectedTemplate === 'modern' ? (
+          <ModernATSTemplate data={improved} />
+        ) : selectedTemplate === 'recommended' ? (
+          <RecommendedATSTemplate data={improved} />
+        ) : (
+          <ClassicATSTemplate data={improved} />
+        )}
+      </div>
     </div>
   );
 };

@@ -19,7 +19,8 @@ import {
   Wand2,
   Award,
   Target,
-  ArrowRight
+  ArrowRight,
+  History
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
@@ -153,8 +154,8 @@ const Dashboard = () => {
   };
 
   const handleSelectHistoryItem = async (item) => {
-    // Builder-created resumes open directly in the builder for editing.
-    if (item.originalText === 'Created via Resume Builder') {
+    // Builder-created resumes or resumes with improved resume structure open directly in the builder for editing.
+    if (item.originalText === 'Created via Resume Builder' || item.improvedResume || !item.fileId) {
       navigate(`/builder/${item._id}`);
       return;
     }
@@ -165,7 +166,7 @@ const Dashboard = () => {
         setAnalysisResult(data.resume);
         setParsedData({
           originalText: data.resume.originalText,
-          filename: data.resume.originalFile?.filename || item.originalFile?.filename,
+          filename: data.resume.title || data.resume.originalFile?.filename || item.originalFile?.filename,
           size: data.resume.originalFile?.size || item.originalFile?.size,
           extractedData: data.resume.improvedResume
         });
@@ -176,6 +177,23 @@ const Dashboard = () => {
       navigate(`/analysis/${item._id}`);
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleOpenLastDraft = async () => {
+    try {
+      const { data } = await api.get('/resume/latest');
+      if (data?.resume?._id) {
+        navigate(`/builder/${data.resume._id}`);
+      } else {
+        toast.error('No saved resume draft found. Click "Create Resume" to start one!');
+      }
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        toast.error('No saved resume draft found. Click "Create Resume" to start one!');
+      } else {
+        toast.error('Failed to load last draft.');
+      }
     }
   };
 
@@ -608,23 +626,34 @@ const Dashboard = () => {
           {/* Sidebar history log */}
           <div className="space-y-6">
             <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
-              <div className="create-resume-brush-wrap">
+              <div className="space-y-2">
+                <div className="create-resume-brush-wrap">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/builder/new')}
+                    aria-label="Create Resume"
+                    className="create-resume-brush flex w-full min-h-[58px] sm:min-h-[66px] items-center"
+                  >
+                    <span className="relative z-10 grid w-full grid-cols-[auto_1fr_auto] items-center gap-2.5 sm:gap-4 px-4 sm:px-7 py-3.5 sm:py-4">
+                      <span className="flex items-center gap-3 sm:gap-4">
+                        <FileText className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0" strokeWidth={2} aria-hidden="true" />
+                        <span className="h-7 sm:h-8 w-px bg-white/70 flex-shrink-0" aria-hidden="true" />
+                      </span>
+                      <span className="text-center text-base sm:text-lg font-extrabold tracking-wide whitespace-nowrap">
+                        Create Resume
+                      </span>
+                      <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" strokeWidth={2.5} aria-hidden="true" />
+                    </span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => navigate('/builder/new')}
-                  aria-label="Create Resume"
-                  className="create-resume-brush flex w-full min-h-[58px] sm:min-h-[66px] items-center"
+                  onClick={handleOpenLastDraft}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-slate-800 bg-slate-900/80 hover:bg-slate-850 hover:border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition shadow-sm"
                 >
-                  <span className="relative z-10 grid w-full grid-cols-[auto_1fr_auto] items-center gap-2.5 sm:gap-4 px-4 sm:px-7 py-3.5 sm:py-4">
-                    <span className="flex items-center gap-3 sm:gap-4">
-                      <FileText className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0" strokeWidth={2} aria-hidden="true" />
-                      <span className="h-7 sm:h-8 w-px bg-white/70 flex-shrink-0" aria-hidden="true" />
-                    </span>
-                    <span className="text-center text-base sm:text-lg font-extrabold tracking-wide whitespace-nowrap">
-                      Create Resume
-                    </span>
-                    <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" strokeWidth={2.5} aria-hidden="true" />
-                  </span>
+                  <History className="w-4 h-4 text-orange-400" />
+                  <span>Open Last Draft</span>
                 </button>
               </div>
 
@@ -644,30 +673,32 @@ const Dashboard = () => {
                     >
                       <div 
                         onClick={() => handleSelectHistoryItem(item)}
-                        title={item.originalFile?.filename || item.filename || 'Resume'}
+                        title={item.title || item.originalFile?.filename || item.filename || 'Resume'}
                         className="cursor-pointer flex items-center justify-between"
                       >
                         <div className="space-y-1 text-left min-w-0 pr-2">
-                          <h4 className="text-sm font-semibold text-white truncate max-w-[140px]">
-                            {item.originalFile?.filename || item.filename}
+                          <h4 className="text-sm font-semibold text-white truncate max-w-[140px]" title={item.title || item.originalFile?.filename || item.filename || 'Untitled Resume'}>
+                            {item.title || item.originalFile?.filename || item.filename || 'Untitled Resume'}
                           </h4>
                           <div className="flex items-center space-x-2 text-xs text-slate-500">
-                            <span className="truncate max-w-[100px]">{item.jobRole}</span>
+                            <span className="truncate max-w-[100px]">{item.targetRole || item.jobRole}</span>
                             <span>•</span>
                             <div className="flex items-center space-x-1 flex-shrink-0">
                               <Calendar className="w-3.5 h-3.5" />
-                              <span>{new Date(item.createdAt || item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                              <span>{new Date(item.updatedAt || item.createdAt || item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
                             </div>
                           </div>
                         </div>
                         <div className="flex items-center space-x-2 flex-shrink-0">
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                            item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400' :
-                            item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400' :
-                            'bg-rose-500/10 text-rose-400'
-                          }`}>
-                            {item.atsScore}
-                          </span>
+                          {typeof item.atsScore === 'number' && (
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                              item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400' :
+                              item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400' :
+                              'bg-rose-500/10 text-rose-400'
+                            }`}>
+                              {item.atsScore}
+                            </span>
+                          )}
                           <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
                         </div>
                       </div>
@@ -747,8 +778,10 @@ const Dashboard = () => {
                   className="p-2.5 rounded-xl bg-slate-950/40 hover:bg-slate-950 border border-slate-850 hover:border-slate-800 cursor-pointer flex items-center justify-between text-xs transition-colors"
                 >
                   <div className="truncate pr-2">
-                    <div className="font-semibold text-white truncate">{item.originalFile?.filename || item.filename}</div>
-                    <div className="text-[11px] text-slate-500">{item.jobRole}</div>
+                    <div className="font-semibold text-white truncate" title={item.title || item.originalFile?.filename || item.filename || 'Untitled Resume'}>
+                      {item.title || item.originalFile?.filename || item.filename || 'Untitled Resume'}
+                    </div>
+                    <div className="text-[11px] text-slate-500">{item.targetRole || item.jobRole}</div>
                   </div>
                   <span className={`px-2 py-0.5 rounded font-bold ${
                     item.atsScore >= 75 ? 'text-emerald-400 bg-emerald-500/10' :

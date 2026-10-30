@@ -104,48 +104,50 @@ const History = () => {
               key={item._id}
               className="glass-panel glass-panel-hover p-6 rounded-2xl border border-slate-800 flex flex-col justify-between group h-64 cursor-pointer"
               onClick={() => {
-                if (item.originalText === 'Created via Resume Builder') {
+                if (item.originalText === 'Created via Resume Builder' || item.improvedResume || !item.fileId) {
                   navigate(`/builder/${item._id}`);
                 } else {
                   navigate(`/analysis/${item._id}`);
                 }
               }}
-              title={item.originalFile?.filename || 'Resume'}
+              title={item.title || item.originalFile?.filename || item.filename || 'Resume'}
             >
               <div className="space-y-4">
                 {/* Top: title and score badge */}
                 <div className="flex items-start justify-between gap-4">
-                  <div className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400" title={item.originalFile?.filename || 'Resume'}>
+                  <div className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400" title={item.title || item.originalFile?.filename || item.filename || 'Resume'}>
                     <FileText className="w-6 h-6 text-brandPurple" />
                   </div>
-                  <span 
-                    title={`ATS Score: ${item.atsScore}/100`}
-                    className={`text-sm font-extrabold px-3 py-1 rounded-lg ${
-                    item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/10' :
-                    item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/10' :
-                    'bg-rose-500/10 text-rose-400 border border-rose-500/10'
-                  }`}>
-                    Score: {item.atsScore}
-                  </span>
+                  {typeof item.atsScore === 'number' && (
+                    <span 
+                      title={`ATS Score: ${item.atsScore}/100`}
+                      className={`text-sm font-extrabold px-3 py-1 rounded-lg ${
+                      item.atsScore >= 75 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/10' :
+                      item.atsScore >= 50 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/10' :
+                      'bg-rose-500/10 text-rose-400 border border-rose-500/10'
+                    }`}>
+                      Score: {item.atsScore}
+                    </span>
+                  )}
                 </div>
 
                 {/* Middle: Details */}
                 <div className="space-y-1">
                   <h4 
                     className="font-bold text-base text-white group-hover:text-brandPurple transition-colors truncate"
-                    title={item.originalFile?.filename || 'Resume'}
+                    title={item.title || item.originalFile?.filename || item.filename || 'Resume'}
                   >
-                    {item.originalFile?.filename}
+                    {item.title || item.originalFile?.filename || item.filename || 'Untitled Resume'}
                   </h4>
                   <div className="flex items-center space-x-2 text-xs text-slate-400">
                     <div className="flex items-center space-x-1">
                       <Briefcase className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{item.jobRole}</span>
+                      <span>{item.targetRole || item.jobRole}</span>
                     </div>
                     <span>•</span>
                     <div className="flex items-center space-x-1">
                       <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{new Date(item.createdAt || item.created_at).toLocaleDateString()}</span>
+                      <span>{new Date(item.updatedAt || item.createdAt || item.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
                 </div>
@@ -181,7 +183,7 @@ const History = () => {
 
                 <div className="flex items-center space-x-3">
                   <span className="flex items-center text-xs font-bold text-brandPurple group-hover:underline">
-                    <span>{item.originalText === 'Created via Resume Builder' ? 'Edit in Builder' : 'View Scan'}</span>
+                    <span>{item.originalText === 'Created via Resume Builder' || item.improvedResume || !item.fileId ? 'Edit in Builder' : 'View Scan'}</span>
                     <ArrowUpRight className="w-4 h-4 ml-0.5" />
                   </span>
                   <button

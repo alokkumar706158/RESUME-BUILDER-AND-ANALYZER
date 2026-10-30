@@ -629,10 +629,13 @@ export const saveResume = async (req, res) => {
     const finalRole = jobRole || targetRole || (resume ? resume.jobRole : 'Software Engineer');
     const finalText = originalText || extractedText || (resume ? resume.originalText : 'Created via Resume Builder');
     const finalScore = typeof atsScore === 'number' ? atsScore : (resume ? resume.atsScore : 75);
+    const candidateName = (finalData?.contactInfo?.fullName || '').trim();
+    const resumeTitle = req.body.title || (candidateName ? `${candidateName} - ${finalRole}` : (originalName !== 'resume.pdf' ? originalName.replace(/\.pdf$/i, '') : `${finalRole} Resume`));
 
     if (!resume) {
       resume = new Resume({
         userId: req.user._id,
+        title: resumeTitle,
         fileId: fileId || null,
         filename: originalName,
         originalFilename: originalName,
@@ -653,6 +656,7 @@ export const saveResume = async (req, res) => {
         selectedTemplate: selectedTemplate || 'classic'
       });
     } else {
+      if (resumeTitle) resume.title = resumeTitle;
       if (fileId) {
         resume.fileId = fileId;
         if (!resume.originalFile) resume.originalFile = {};
@@ -662,7 +666,10 @@ export const saveResume = async (req, res) => {
         if (!resume.originalFile) resume.originalFile = {};
         resume.originalFile.path = relPath;
       }
-      if (finalData) resume.improvedResume = finalData;
+      if (finalData) {
+        resume.improvedResume = finalData;
+        resume.markModified('improvedResume');
+      }
       if (finalRole) {
         resume.jobRole = finalRole;
         resume.targetRole = finalRole;
@@ -771,7 +778,7 @@ export const downloadResumePDF = async (req, res) => {
 };
 
 export const updateResumeData = async (req, res) => {
-  const { resumeId, improvedResume, selectedTemplate, jobRole, atsScore } = req.body;
+  const { resumeId, improvedResume, resumeData, selectedTemplate, jobRole, targetRole, atsScore, title, filename } = req.body;
 
   try {
     let resume = null;
@@ -785,22 +792,53 @@ export const updateResumeData = async (req, res) => {
       }
     }
 
+    const finalResumeData = improvedResume || resumeData || (resume ? resume.improvedResume : {});
+    const candidateName = (finalResumeData?.contactInfo?.fullName || '').trim();
+    const finalRole = jobRole || targetRole || (resume ? (resume.jobRole || resume.targetRole) : 'Software Engineer');
+    const resumeTitle = title || (candidateName ? `${candidateName} - ${finalRole}` : `${finalRole} Resume`);
+    const resumeFilename = filename || `${resumeTitle.replace(/[^a-zA-Z0-9_\- ]/g, '')}.pdf`;
+
     if (!resume) {
       resume = new Resume({
         userId: req.user._id,
-        originalFile: { filename: 'builder_resume.pdf', path: '', size: 0 },
+        title: resumeTitle,
+        filename: resumeFilename,
+        originalFilename: resumeFilename,
+        originalFile: { filename: resumeFilename, path: '', size: 0 },
         originalText: 'Created via Resume Builder',
-        jobRole: jobRole || 'Software Engineer',
+        extractedText: 'Created via Resume Builder',
+        jobRole: finalRole,
+        targetRole: finalRole,
         atsScore: typeof atsScore === 'number' ? atsScore : 85,
         analysis: {},
-        improvedResume: improvedResume || {},
+        improvedResume: finalResumeData || {},
         selectedTemplate: selectedTemplate || 'classic'
       });
     } else {
-      if (improvedResume) resume.improvedResume = improvedResume;
+      if (finalResumeData) {
+        resume.improvedResume = finalResumeData;
+        resume.markModified('improvedResume');
+      }
       if (selectedTemplate) resume.selectedTemplate = selectedTemplate;
-      if (jobRole) resume.jobRole = jobRole;
+      if (finalRole) {
+        resume.jobRole = finalRole;
+        resume.targetRole = finalRole;
+      }
       if (typeof atsScore === 'number') resume.atsScore = atsScore;
+
+      // Keep title and filename fresh with latest full name or role
+      if (title) {
+        resume.title = title;
+      } else if (candidateName) {
+        resume.title = resumeTitle;
+      }
+      if (filename) {
+        resume.filename = filename;
+      } else if (candidateName) {
+        resume.filename = resumeFilename;
+      }
+      if (!resume.originalFile) resume.originalFile = {};
+      resume.originalFile.filename = resume.filename || resumeFilename;
     }
 
     await resume.save();
